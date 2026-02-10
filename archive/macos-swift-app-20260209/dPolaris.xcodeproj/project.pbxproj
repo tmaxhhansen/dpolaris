@@ -1,0 +1,399 @@
+// !$*UTF8*$!
+{
+	archiveVersion = 1;
+	classes = {
+	};
+	objectVersion = 56;
+	objects = {
+
+/* Begin PBXBuildFile section */
+		A1000001 /* dPolarisApp.swift in Sources */ = {isa = PBXBuildFile; fileRef = A2000001 /* dPolarisApp.swift */; };
+		A1000002 /* ContentView.swift in Sources */ = {isa = PBXBuildFile; fileRef = A2000002 /* ContentView.swift */; };
+		A1000003 /* Assets.xcassets in Resources */ = {isa = PBXBuildFile; fileRef = A2000003 /* Assets.xcassets */; };
+		A1000004 /* Models.swift in Sources */ = {isa = PBXBuildFile; fileRef = A2000004 /* Models.swift */; };
+		A1000005 /* APIService.swift in Sources */ = {isa = PBXBuildFile; fileRef = A2000005 /* APIService.swift */; };
+		A1000006 /* WebSocketService.swift in Sources */ = {isa = PBXBuildFile; fileRef = A2000006 /* WebSocketService.swift */; };
+		A1000007 /* DashboardView.swift in Sources */ = {isa = PBXBuildFile; fileRef = A2000007 /* DashboardView.swift */; };
+		A1000008 /* AIManagerView.swift in Sources */ = {isa = PBXBuildFile; fileRef = A2000008 /* AIManagerView.swift */; };
+		A1000009 /* AnalysisView.swift in Sources */ = {isa = PBXBuildFile; fileRef = A2000009 /* AnalysisView.swift */; };
+		A1000010 /* PredictionsView.swift in Sources */ = {isa = PBXBuildFile; fileRef = A2000010 /* PredictionsView.swift */; };
+		A1000011 /* ChatView.swift in Sources */ = {isa = PBXBuildFile; fileRef = A2000011 /* ChatView.swift */; };
+		A1000012 /* JournalView.swift in Sources */ = {isa = PBXBuildFile; fileRef = A2000012 /* JournalView.swift */; };
+		A1000013 /* WatchlistView.swift in Sources */ = {isa = PBXBuildFile; fileRef = A2000013 /* WatchlistView.swift */; };
+		A1000014 /* SettingsView.swift in Sources */ = {isa = PBXBuildFile; fileRef = A2000014 /* SettingsView.swift */; };
+		A1000015 /* MenuBarView.swift in Sources */ = {isa = PBXBuildFile; fileRef = A2000015 /* MenuBarView.swift */; };
+		A1000016 /* ServerManager.swift in Sources */ = {isa = PBXBuildFile; fileRef = A2000016 /* ServerManager.swift */; };
+/* End PBXBuildFile section */
+
+/* Begin PBXFileReference section */
+		A2000001 /* dPolarisApp.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = dPolarisApp.swift; sourceTree = "<group>"; };
+		A2000002 /* ContentView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ContentView.swift; sourceTree = "<group>"; };
+		A2000003 /* Assets.xcassets */ = {isa = PBXFileReference; lastKnownFileType = folder.assetcatalog; path = Assets.xcassets; sourceTree = "<group>"; };
+		A2000004 /* Models.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = Models.swift; sourceTree = "<group>"; };
+		A2000005 /* APIService.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = APIService.swift; sourceTree = "<group>"; };
+		A2000006 /* WebSocketService.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = WebSocketService.swift; sourceTree = "<group>"; };
+		A2000007 /* DashboardView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = DashboardView.swift; sourceTree = "<group>"; };
+		A2000008 /* AIManagerView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = AIManagerView.swift; sourceTree = "<group>"; };
+		A2000009 /* AnalysisView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = AnalysisView.swift; sourceTree = "<group>"; };
+		A2000010 /* PredictionsView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = PredictionsView.swift; sourceTree = "<group>"; };
+		A2000011 /* ChatView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ChatView.swift; sourceTree = "<group>"; };
+		A2000012 /* JournalView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = JournalView.swift; sourceTree = "<group>"; };
+		A2000013 /* WatchlistView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = WatchlistView.swift; sourceTree = "<group>"; };
+		A2000014 /* SettingsView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = SettingsView.swift; sourceTree = "<group>"; };
+		A2000015 /* MenuBarView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = MenuBarView.swift; sourceTree = "<group>"; };
+		A2000016 /* ServerManager.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ServerManager.swift; sourceTree = "<group>"; };
+		A3000001 /* dPolaris.app */ = {isa = PBXFileReference; explicitFileType = wrapper.application; includeInIndex = 0; path = dPolaris.app; sourceTree = BUILT_PRODUCTS_DIR; };
+/* End PBXFileReference section */
+
+/* Begin PBXGroup section */
+		A4000001 = {
+			isa = PBXGroup;
+			children = (
+				A4000010 /* App */,
+				A4000011 /* Models */,
+				A4000012 /* Services */,
+				A4000013 /* Views */,
+				A4000014 /* Resources */,
+				A4000003 /* Products */,
+			);
+			sourceTree = "<group>";
+		};
+		A4000003 /* Products */ = {
+			isa = PBXGroup;
+			children = (
+				A3000001 /* dPolaris.app */,
+			);
+			name = Products;
+			sourceTree = "<group>";
+		};
+		A4000010 /* App */ = {
+			isa = PBXGroup;
+			children = (
+				A2000001 /* dPolarisApp.swift */,
+			);
+			path = App;
+			sourceTree = "<group>";
+		};
+		A4000011 /* Models */ = {
+			isa = PBXGroup;
+			children = (
+				A2000004 /* Models.swift */,
+			);
+			path = Models;
+			sourceTree = "<group>";
+		};
+		A4000012 /* Services */ = {
+			isa = PBXGroup;
+			children = (
+				A2000005 /* APIService.swift */,
+				A2000006 /* WebSocketService.swift */,
+				A2000016 /* ServerManager.swift */,
+			);
+			path = Services;
+			sourceTree = "<group>";
+		};
+		A4000013 /* Views */ = {
+			isa = PBXGroup;
+			children = (
+				A2000002 /* ContentView.swift */,
+				A4000020 /* Dashboard */,
+				A4000021 /* AIManager */,
+				A4000022 /* Analysis */,
+				A4000023 /* Predictions */,
+				A4000024 /* Chat */,
+				A4000025 /* Journal */,
+				A4000026 /* Watchlist */,
+				A4000027 /* Settings */,
+				A4000028 /* MenuBar */,
+			);
+			path = Views;
+			sourceTree = "<group>";
+		};
+		A4000014 /* Resources */ = {
+			isa = PBXGroup;
+			children = (
+				A2000003 /* Assets.xcassets */,
+			);
+			path = Resources;
+			sourceTree = "<group>";
+		};
+		A4000020 /* Dashboard */ = {
+			isa = PBXGroup;
+			children = (
+				A2000007 /* DashboardView.swift */,
+			);
+			path = Dashboard;
+			sourceTree = "<group>";
+		};
+		A4000021 /* AIManager */ = {
+			isa = PBXGroup;
+			children = (
+				A2000008 /* AIManagerView.swift */,
+			);
+			path = AIManager;
+			sourceTree = "<group>";
+		};
+		A4000022 /* Analysis */ = {
+			isa = PBXGroup;
+			children = (
+				A2000009 /* AnalysisView.swift */,
+			);
+			path = Analysis;
+			sourceTree = "<group>";
+		};
+		A4000023 /* Predictions */ = {
+			isa = PBXGroup;
+			children = (
+				A2000010 /* PredictionsView.swift */,
+			);
+			path = Predictions;
+			sourceTree = "<group>";
+		};
+		A4000024 /* Chat */ = {
+			isa = PBXGroup;
+			children = (
+				A2000011 /* ChatView.swift */,
+			);
+			path = Chat;
+			sourceTree = "<group>";
+		};
+		A4000025 /* Journal */ = {
+			isa = PBXGroup;
+			children = (
+				A2000012 /* JournalView.swift */,
+			);
+			path = Journal;
+			sourceTree = "<group>";
+		};
+		A4000026 /* Watchlist */ = {
+			isa = PBXGroup;
+			children = (
+				A2000013 /* WatchlistView.swift */,
+			);
+			path = Watchlist;
+			sourceTree = "<group>";
+		};
+		A4000027 /* Settings */ = {
+			isa = PBXGroup;
+			children = (
+				A2000014 /* SettingsView.swift */,
+			);
+			path = Settings;
+			sourceTree = "<group>";
+		};
+		A4000028 /* MenuBar */ = {
+			isa = PBXGroup;
+			children = (
+				A2000015 /* MenuBarView.swift */,
+			);
+			path = MenuBar;
+			sourceTree = "<group>";
+		};
+/* End PBXGroup section */
+
+/* Begin PBXNativeTarget section */
+		A5000001 /* dPolaris */ = {
+			isa = PBXNativeTarget;
+			buildConfigurationList = A6000001 /* Build configuration list for PBXNativeTarget "dPolaris" */;
+			buildPhases = (
+				A7000001 /* Sources */,
+				A7000002 /* Resources */,
+			);
+			buildRules = (
+			);
+			dependencies = (
+			);
+			name = dPolaris;
+			productName = dPolaris;
+			productReference = A3000001 /* dPolaris.app */;
+			productType = "com.apple.product-type.application";
+		};
+/* End PBXNativeTarget section */
+
+/* Begin PBXProject section */
+		A8000001 /* Project object */ = {
+			isa = PBXProject;
+			attributes = {
+				BuildIndependentTargetsInParallel = 1;
+				LastSwiftUpdateCheck = 1500;
+				LastUpgradeCheck = 1500;
+			};
+			buildConfigurationList = A6000002 /* Build configuration list for PBXProject "dPolaris" */;
+			compatibilityVersion = "Xcode 14.0";
+			developmentRegion = en;
+			hasScannedForEncodings = 0;
+			knownRegions = (
+				en,
+				Base,
+			);
+			mainGroup = A4000001;
+			productRefGroup = A4000003 /* Products */;
+			projectDirPath = "";
+			projectRoot = "";
+			targets = (
+				A5000001 /* dPolaris */,
+			);
+		};
+/* End PBXProject section */
+
+/* Begin PBXResourcesBuildPhase section */
+		A7000002 /* Resources */ = {
+			isa = PBXResourcesBuildPhase;
+			buildActionMask = 2147483647;
+			files = (
+				A1000003 /* Assets.xcassets in Resources */,
+			);
+			runOnlyForDeploymentPostprocessing = 0;
+		};
+/* End PBXResourcesBuildPhase section */
+
+/* Begin PBXSourcesBuildPhase section */
+		A7000001 /* Sources */ = {
+			isa = PBXSourcesBuildPhase;
+			buildActionMask = 2147483647;
+			files = (
+				A1000001 /* dPolarisApp.swift in Sources */,
+				A1000002 /* ContentView.swift in Sources */,
+				A1000004 /* Models.swift in Sources */,
+				A1000005 /* APIService.swift in Sources */,
+				A1000006 /* WebSocketService.swift in Sources */,
+				A1000016 /* ServerManager.swift in Sources */,
+				A1000007 /* DashboardView.swift in Sources */,
+				A1000008 /* AIManagerView.swift in Sources */,
+				A1000009 /* AnalysisView.swift in Sources */,
+				A1000010 /* PredictionsView.swift in Sources */,
+				A1000011 /* ChatView.swift in Sources */,
+				A1000012 /* JournalView.swift in Sources */,
+				A1000013 /* WatchlistView.swift in Sources */,
+				A1000014 /* SettingsView.swift in Sources */,
+				A1000015 /* MenuBarView.swift in Sources */,
+			);
+			runOnlyForDeploymentPostprocessing = 0;
+		};
+/* End PBXSourcesBuildPhase section */
+
+/* Begin XCBuildConfiguration section */
+		A9000001 /* Debug */ = {
+			isa = XCBuildConfiguration;
+			buildSettings = {
+				ASSETCATALOG_COMPILER_APPICON_NAME = AppIcon;
+				CODE_SIGN_STYLE = Automatic;
+				COMBINE_HIDPI_IMAGES = YES;
+				CURRENT_PROJECT_VERSION = 1;
+				DEVELOPMENT_TEAM = "";
+				ENABLE_HARDENED_RUNTIME = YES;
+				GENERATE_INFOPLIST_FILE = YES;
+				INFOPLIST_KEY_LSApplicationCategoryType = "public.app-category.finance";
+				INFOPLIST_KEY_NSHumanReadableCopyright = "";
+				LD_RUNPATH_SEARCH_PATHS = (
+					"$(inherited)",
+					"@executable_path/../Frameworks",
+				);
+				MACOSX_DEPLOYMENT_TARGET = 14.0;
+				MARKETING_VERSION = 1.0;
+				PRODUCT_BUNDLE_IDENTIFIER = com.dpolaris.app;
+				PRODUCT_NAME = "$(TARGET_NAME)";
+				SWIFT_EMIT_LOC_STRINGS = YES;
+				SWIFT_VERSION = 5.0;
+			};
+			name = Debug;
+		};
+		A9000002 /* Release */ = {
+			isa = XCBuildConfiguration;
+			buildSettings = {
+				ASSETCATALOG_COMPILER_APPICON_NAME = AppIcon;
+				CODE_SIGN_STYLE = Automatic;
+				COMBINE_HIDPI_IMAGES = YES;
+				CURRENT_PROJECT_VERSION = 1;
+				DEVELOPMENT_TEAM = "";
+				ENABLE_HARDENED_RUNTIME = YES;
+				GENERATE_INFOPLIST_FILE = YES;
+				INFOPLIST_KEY_LSApplicationCategoryType = "public.app-category.finance";
+				INFOPLIST_KEY_NSHumanReadableCopyright = "";
+				LD_RUNPATH_SEARCH_PATHS = (
+					"$(inherited)",
+					"@executable_path/../Frameworks",
+				);
+				MACOSX_DEPLOYMENT_TARGET = 14.0;
+				MARKETING_VERSION = 1.0;
+				PRODUCT_BUNDLE_IDENTIFIER = com.dpolaris.app;
+				PRODUCT_NAME = "$(TARGET_NAME)";
+				SWIFT_EMIT_LOC_STRINGS = YES;
+				SWIFT_VERSION = 5.0;
+			};
+			name = Release;
+		};
+		A9000003 /* Debug */ = {
+			isa = XCBuildConfiguration;
+			buildSettings = {
+				ALWAYS_SEARCH_USER_PATHS = NO;
+				CLANG_ANALYZER_NONNULL = YES;
+				CLANG_CXX_LANGUAGE_STANDARD = "gnu++20";
+				CLANG_ENABLE_MODULES = YES;
+				CLANG_ENABLE_OBJC_ARC = YES;
+				CODE_SIGN_ENTITLEMENTS = dPolaris.entitlements;
+				COPY_PHASE_STRIP = NO;
+				DEBUG_INFORMATION_FORMAT = dwarf;
+				ENABLE_STRICT_OBJC_MSGSEND = YES;
+				ENABLE_TESTABILITY = YES;
+				GCC_DYNAMIC_NO_PIC = NO;
+				GCC_OPTIMIZATION_LEVEL = 0;
+				GCC_WARN_ABOUT_RETURN_TYPE = YES_ERROR;
+				GCC_WARN_UNINITIALIZED_AUTOS = YES_AGGRESSIVE;
+				MACOSX_DEPLOYMENT_TARGET = 14.0;
+				MTL_ENABLE_DEBUG_INFO = INCLUDE_SOURCE;
+				ONLY_ACTIVE_ARCH = YES;
+				SDKROOT = macosx;
+				SWIFT_ACTIVE_COMPILATION_CONDITIONS = DEBUG;
+				SWIFT_OPTIMIZATION_LEVEL = "-Onone";
+			};
+			name = Debug;
+		};
+		A9000004 /* Release */ = {
+			isa = XCBuildConfiguration;
+			buildSettings = {
+				ALWAYS_SEARCH_USER_PATHS = NO;
+				CLANG_ANALYZER_NONNULL = YES;
+				CLANG_CXX_LANGUAGE_STANDARD = "gnu++20";
+				CLANG_ENABLE_MODULES = YES;
+				CLANG_ENABLE_OBJC_ARC = YES;
+				CODE_SIGN_ENTITLEMENTS = dPolaris.entitlements;
+				COPY_PHASE_STRIP = NO;
+				DEBUG_INFORMATION_FORMAT = "dwarf-with-dsym";
+				ENABLE_NS_ASSERTIONS = NO;
+				ENABLE_STRICT_OBJC_MSGSEND = YES;
+				GCC_WARN_ABOUT_RETURN_TYPE = YES_ERROR;
+				GCC_WARN_UNINITIALIZED_AUTOS = YES_AGGRESSIVE;
+				MACOSX_DEPLOYMENT_TARGET = 14.0;
+				MTL_ENABLE_DEBUG_INFO = NO;
+				SDKROOT = macosx;
+				SWIFT_COMPILATION_MODE = wholemodule;
+				SWIFT_OPTIMIZATION_LEVEL = "-O";
+			};
+			name = Release;
+		};
+/* End XCBuildConfiguration section */
+
+/* Begin XCConfigurationList section */
+		A6000001 /* Build configuration list for PBXNativeTarget "dPolaris" */ = {
+			isa = XCConfigurationList;
+			buildConfigurations = (
+				A9000001 /* Debug */,
+				A9000002 /* Release */,
+			);
+			defaultConfigurationIsVisible = 0;
+			defaultConfigurationName = Release;
+		};
+		A6000002 /* Build configuration list for PBXProject "dPolaris" */ = {
+			isa = XCConfigurationList;
+			buildConfigurations = (
+				A9000003 /* Debug */,
+				A9000004 /* Release */,
+			);
+			defaultConfigurationIsVisible = 0;
+			defaultConfigurationName = Release;
+		};
+/* End XCConfigurationList section */
+	};
+	rootObject = A8000001 /* Project object */;
+}
