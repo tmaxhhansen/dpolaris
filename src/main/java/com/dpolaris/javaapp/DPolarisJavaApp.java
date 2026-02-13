@@ -106,6 +106,15 @@ public final class DPolarisJavaApp {
     private static final Color COLOR_LOG_BG = new Color(19, 20, 24);
     private static final Color COLOR_INPUT = new Color(49, 52, 62);
     private static final Color COLOR_MENU_ACTIVE = new Color(64, 86, 133);
+    private static final Color CONTROL_PRIMARY_BG = new Color(41, 129, 245);
+    private static final Color CONTROL_PRIMARY_BG_DISABLED = new Color(60, 79, 109);
+    private static final Color CONTROL_SECONDARY_BG = new Color(74, 79, 92);
+    private static final Color CONTROL_SECONDARY_BG_DISABLED = new Color(59, 62, 72);
+    private static final Color CONTROL_DANGER_BG = new Color(196, 70, 76);
+    private static final Color CONTROL_DANGER_BG_DISABLED = new Color(109, 63, 65);
+    private static final Color CONTROL_TEXT_ENABLED = new Color(248, 250, 255);
+    private static final Color CONTROL_TEXT_DISABLED = new Color(219, 225, 238);
+    private static final Dimension CONTROL_BUTTON_SIZE = new Dimension(140, 34);
     private static final String VIEW_AI_MANAGEMENT = "AI_MANAGEMENT";
     private static final String VIEW_UNIVERSE_SCAN = "UNIVERSE_SCAN";
     private static final String VIEW_DASHBOARD = "DASHBOARD";
@@ -139,6 +148,7 @@ public final class DPolarisJavaApp {
     private JButton saveBackendLogsButton;
     private JButton startDaemonButton;
     private JButton stopDaemonButton;
+    private JButton clearBackendLogsButton;
     private JLabel backendStatusValue;
     private JLabel daemonStatusValue;
     private JTextArea backendLogArea;
@@ -384,10 +394,20 @@ public final class DPolarisJavaApp {
 
     private static void installLookAndFeel() {
         try {
-            UIManager.setLookAndFeel(UIManager.getSystemLookAndFeelClassName());
+            if (isWindows()) {
+                try {
+                    UIManager.setLookAndFeel("com.sun.java.swing.plaf.windows.WindowsLookAndFeel");
+                } catch (Exception ignored) {
+                    UIManager.setLookAndFeel(UIManager.getSystemLookAndFeelClassName());
+                }
+            } else {
+                UIManager.setLookAndFeel(UIManager.getSystemLookAndFeelClassName());
+            }
         } catch (Exception ignored) {
             // Fall back to default.
         }
+        UIManager.put("Button.disabledText", CONTROL_TEXT_DISABLED);
+        UIManager.put("textInactiveText", CONTROL_TEXT_DISABLED);
     }
 
     public DPolarisJavaApp() {
@@ -7691,23 +7711,23 @@ public final class DPolarisJavaApp {
         saveBackendLogsButton = new JButton("Save Logs");
         startDaemonButton = new JButton("Start Daemon");
         stopDaemonButton = new JButton("Stop Daemon");
-        JButton clearLogsButton = new JButton("Clear Logs");
+        clearBackendLogsButton = new JButton("Clear Logs");
         backendStatusValue = new JLabel();
         daemonStatusValue = new JLabel();
 
         styleInputField(backendPathField);
         backendPathField.setEditable(false);
-        styleButton(startBackendButton, true);
-        styleButton(stopBackendButton, false);
-        styleButton(restartBackendButton, false);
-        styleButton(saveBackendLogsButton, false);
-        styleButton(startDaemonButton, false);
-        styleButton(stopDaemonButton, false);
-        styleButton(clearLogsButton, false);
+        stylePrimary(startBackendButton);
+        styleDanger(stopBackendButton);
+        styleSecondary(restartBackendButton);
+        styleSecondary(saveBackendLogsButton);
+        stylePrimary(startDaemonButton);
+        styleDanger(stopDaemonButton);
+        styleSecondary(clearBackendLogsButton);
         styleInlineStatus(backendStatusValue, "STOPPED", COLOR_MUTED);
         styleInlineStatus(daemonStatusValue, "Scheduler: unknown", COLOR_MUTED);
 
-        clearLogsButton.addActionListener(e -> {
+        clearBackendLogsButton.addActionListener(e -> {
             synchronized (backendLogBuffer) {
                 backendLogBuffer.clear();
             }
@@ -7715,6 +7735,7 @@ public final class DPolarisJavaApp {
             if (saveBackendLogsButton != null) {
                 saveBackendLogsButton.setEnabled(false);
             }
+            styleSecondary(saveBackendLogsButton);
         });
 
         JLabel pathLabel = createFormLabel("AI Backend Path");
@@ -7722,19 +7743,23 @@ public final class DPolarisJavaApp {
                 "Fixed launch command: C:\\my-git\\dpolaris_ai\\.venv\\Scripts\\python.exe -m cli.main server --host 127.0.0.1 --port 8420"
         );
 
-        JPanel runtimeActions = new JPanel(new FlowLayout(FlowLayout.LEFT, 8, 0));
+        JPanel runtimeActions = new JPanel(new FlowLayout(FlowLayout.LEFT, 10, 6));
         runtimeActions.setOpaque(false);
+        runtimeActions.setMinimumSize(new Dimension(10, 46));
+        runtimeActions.setPreferredSize(new Dimension(10, 46));
         runtimeActions.add(startBackendButton);
         runtimeActions.add(stopBackendButton);
         runtimeActions.add(restartBackendButton);
         runtimeActions.add(saveBackendLogsButton);
         runtimeActions.add(backendStatusValue);
 
-        JPanel daemonActions = new JPanel(new FlowLayout(FlowLayout.LEFT, 8, 0));
+        JPanel daemonActions = new JPanel(new FlowLayout(FlowLayout.LEFT, 10, 6));
         daemonActions.setOpaque(false);
+        daemonActions.setMinimumSize(new Dimension(10, 46));
+        daemonActions.setPreferredSize(new Dimension(10, 46));
         daemonActions.add(startDaemonButton);
         daemonActions.add(stopDaemonButton);
-        daemonActions.add(clearLogsButton);
+        daemonActions.add(clearBackendLogsButton);
         daemonActions.add(daemonStatusValue);
 
         JPanel controlsBody = new JPanel(new GridBagLayout());
@@ -8400,24 +8425,13 @@ public final class DPolarisJavaApp {
         boolean running = state == BackendController.State.RUNNING;
         boolean errored = state == BackendController.State.ERROR;
 
-        if (startBackendButton != null) {
-            startBackendButton.setEnabled(!actionInFlight && !starting && !running);
-        }
-        if (stopBackendButton != null) {
-            stopBackendButton.setEnabled(!actionInFlight && (starting || running || errored));
-        }
-        if (restartBackendButton != null) {
-            restartBackendButton.setEnabled(!actionInFlight && !starting);
-        }
-        if (saveBackendLogsButton != null) {
-            saveBackendLogsButton.setEnabled(!backendLogBuffer.isEmpty());
-        }
-        if (startDaemonButton != null) {
-            startDaemonButton.setEnabled(!actionInFlight && !starting);
-        }
-        if (stopDaemonButton != null) {
-            stopDaemonButton.setEnabled(!actionInFlight && !starting);
-        }
+        applyBackendButtonState(startBackendButton, !actionInFlight && !starting && !running, ButtonTone.PRIMARY);
+        applyBackendButtonState(stopBackendButton, !actionInFlight && (starting || running || errored), ButtonTone.DANGER);
+        applyBackendButtonState(restartBackendButton, !actionInFlight && !starting, ButtonTone.SECONDARY);
+        applyBackendButtonState(saveBackendLogsButton, !backendLogBuffer.isEmpty(), ButtonTone.SECONDARY);
+        applyBackendButtonState(startDaemonButton, !actionInFlight && !starting, ButtonTone.PRIMARY);
+        applyBackendButtonState(stopDaemonButton, !actionInFlight && !starting, ButtonTone.DANGER);
+        applyBackendButtonState(clearBackendLogsButton, true, ButtonTone.SECONDARY);
 
         if (backendStatusValue == null) {
             return;
@@ -11108,13 +11122,75 @@ public final class DPolarisJavaApp {
             }
             backendLogArea.setCaretPosition(backendLogArea.getDocument().getLength());
             if (saveBackendLogsButton != null) {
-                saveBackendLogsButton.setEnabled(!backendLogBuffer.isEmpty());
+                applyBackendButtonState(saveBackendLogsButton, !backendLogBuffer.isEmpty(), ButtonTone.SECONDARY);
             }
         });
     }
 
     private void onBackendControllerLog(String stream, String message) {
         appendBackendLog(ts() + " | [" + stream + "] " + message);
+    }
+
+    private enum ButtonTone {
+        PRIMARY,
+        SECONDARY,
+        DANGER
+    }
+
+    private void stylePrimary(JButton button) {
+        styleControlButton(button, ButtonTone.PRIMARY);
+    }
+
+    private void styleSecondary(JButton button) {
+        styleControlButton(button, ButtonTone.SECONDARY);
+    }
+
+    private void styleDanger(JButton button) {
+        styleControlButton(button, ButtonTone.DANGER);
+    }
+
+    private void applyBackendButtonState(JButton button, boolean enabled, ButtonTone tone) {
+        if (button == null) {
+            return;
+        }
+        button.setEnabled(enabled);
+        styleControlButton(button, tone);
+    }
+
+    private void styleControlButton(JButton button, ButtonTone tone) {
+        if (button == null) {
+            return;
+        }
+
+        Color enabledBg;
+        Color disabledBg;
+        switch (tone) {
+            case PRIMARY -> {
+                enabledBg = CONTROL_PRIMARY_BG;
+                disabledBg = CONTROL_PRIMARY_BG_DISABLED;
+            }
+            case DANGER -> {
+                enabledBg = CONTROL_DANGER_BG;
+                disabledBg = CONTROL_DANGER_BG_DISABLED;
+            }
+            default -> {
+                enabledBg = CONTROL_SECONDARY_BG;
+                disabledBg = CONTROL_SECONDARY_BG_DISABLED;
+            }
+        }
+
+        button.setFont(uiFont.deriveFont(Font.BOLD, 13f));
+        button.setOpaque(true);
+        button.setContentAreaFilled(true);
+        button.setBorderPainted(false);
+        button.setFocusPainted(false);
+        button.setRolloverEnabled(false);
+        button.setPreferredSize(CONTROL_BUTTON_SIZE);
+        button.setMinimumSize(CONTROL_BUTTON_SIZE);
+        button.setMargin(new Insets(0, 12, 0, 12));
+        button.setForeground(button.isEnabled() ? CONTROL_TEXT_ENABLED : CONTROL_TEXT_DISABLED);
+        button.setBackground(button.isEnabled() ? enabledBg : disabledBg);
+        button.setBorder(new EmptyBorder(8, 12, 8, 12));
     }
 
     private static String ts() {
