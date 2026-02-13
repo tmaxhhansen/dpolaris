@@ -8,7 +8,9 @@ import java.net.http.HttpRequest;
 import java.net.http.HttpResponse;
 import java.nio.charset.StandardCharsets;
 import java.time.Duration;
+import java.util.ArrayList;
 import java.util.LinkedHashMap;
+import java.util.List;
 import java.util.Map;
 
 final class ApiClient {
@@ -18,6 +20,7 @@ final class ApiClient {
 
     ApiClient(String host, int port) {
         this.client = HttpClient.newBuilder()
+                .version(HttpClient.Version.HTTP_1_1)
                 .connectTimeout(Duration.ofSeconds(5))
                 .build();
         this.host = host;
@@ -69,6 +72,100 @@ final class ApiClient {
 
     Object fetchRunArtifact(String runId, String artifactName) throws IOException, InterruptedException {
         return request("GET", "/runs/" + encode(runId) + "/artifact/" + encode(artifactName), null, 30);
+    }
+
+    Object fetchUniverse(String universeId) throws IOException, InterruptedException {
+        return requestWithFallback(
+                "GET",
+                List.of(
+                        "/scan/universe/" + encode(universeId),
+                        "/api/scan/universe/" + encode(universeId),
+                        "/scan/universe?name=" + encode(universeId),
+                        "/api/scan/universe?name=" + encode(universeId),
+                        "/universe/" + encode(universeId),
+                        "/api/universe/" + encode(universeId)
+                ),
+                null,
+                45
+        );
+    }
+
+    Map<String, Object> startScan(Map<String, Object> payload) throws IOException, InterruptedException {
+        String body = Json.compact(payload == null ? new LinkedHashMap<String, Object>() : payload);
+        Object response = requestWithFallback(
+                "POST",
+                List.of("/scan/start", "/api/scan/start"),
+                body,
+                90
+        );
+        return Json.asObject(response);
+    }
+
+    Map<String, Object> fetchScanStatus(String runId) throws IOException, InterruptedException {
+        Object response = requestWithFallback(
+                "GET",
+                List.of("/scan/status/" + encode(runId), "/api/scan/status/" + encode(runId)),
+                null,
+                8
+        );
+        return Json.asObject(response);
+    }
+
+    Object fetchScanResults(String runId, int page, int pageSize) throws IOException, InterruptedException {
+        int safePage = Math.max(1, page);
+        int safePageSize = Math.max(1, pageSize);
+        String query = "?page=" + safePage + "&page_size=" + safePageSize;
+        return requestWithFallback(
+                "GET",
+                List.of(
+                        "/scan/results/" + encode(runId) + query,
+                        "/api/scan/results/" + encode(runId) + query
+                ),
+                null,
+                90
+        );
+    }
+
+    Map<String, Object> fetchScanResult(String runId, String ticker) throws IOException, InterruptedException {
+        Object response = requestWithFallback(
+                "GET",
+                List.of(
+                        "/scan/result/" + encode(runId) + "/" + encode(ticker),
+                        "/api/scan/result/" + encode(runId) + "/" + encode(ticker)
+                ),
+                null,
+                60
+        );
+        return Json.asObject(response);
+    }
+
+    Object fetchScanRuns() throws IOException, InterruptedException {
+        return requestWithFallback(
+                "GET",
+                List.of("/scan/runs", "/api/scan/runs"),
+                null,
+                30
+        );
+    }
+
+    boolean supportsScanApi() {
+        if (!canReachWithFallback(
+                "GET",
+                List.of("/scan/runs", "/api/scan/runs"),
+                6
+        )) {
+            return false;
+        }
+        return canReachWithFallback(
+                "GET",
+                List.of(
+                        "/scan/universe/nasdaq_top_500",
+                        "/api/scan/universe/nasdaq_top_500",
+                        "/scan/universe?name=nasdaq_top_500",
+                        "/api/scan/universe?name=nasdaq_top_500"
+                ),
+                10
+        );
     }
 
     Map<String, Object> predictSymbol(String symbol) throws IOException, InterruptedException {
@@ -149,6 +246,19 @@ final class ApiClient {
         return Json.asObject(response);
     }
 
+    Map<String, Object> runSchedulerJob(String jobId) throws IOException, InterruptedException {
+        Object response = requestWithFallback(
+                "POST",
+                List.of(
+                        "/api/scheduler/run/" + encode(jobId),
+                        "/scheduler/run/" + encode(jobId)
+                ),
+                "{}",
+                120
+        );
+        return Json.asObject(response);
+    }
+
     Map<String, Object> trainDeepLegacy(String symbol, String modelType, int epochs)
             throws IOException, InterruptedException {
         String path = "/api/deep-learning/train/" + encode(symbol)
@@ -191,8 +301,65 @@ final class ApiClient {
         }
     }
 
+    private Object requestWithFallback(
+            String method,
+            List<String> paths,
+            String body,
+            int timeoutSeconds
+    ) throws IOException, InterruptedException {
+        List<Exception> errors = new ArrayList<>();
+        for (String path : paths) {
+            try {
+                return request(method, path, body, timeoutSeconds);
+            } catch (IOException | InterruptedException ex) {
+                errors.add(ex);
+                if (ex instanceof InterruptedException interrupted) {
+                    throw interrupted;
+                }
+                if (isTimeoutException(ex)) {
+                    break;
+                }
+            }
+        }
+
+        if (errors.isEmpty()) {
+            throw new IOException("No endpoint paths provided.");
+        }
+        Exception last = errors.get(errors.size() - 1);
+        if (last instanceof IOException io) {
+            throw io;
+        }
+        if (last instanceof InterruptedException interrupted) {
+            throw interrupted;
+        }
+        throw new IOException(last.getMessage(), last);
+    }
+
+    private boolean isTimeoutException(Throwable error) {
+        if (error == null) {
+            return false;
+        }
+        String className = error.getClass().getSimpleName().toLowerCase();
+        String message = error.getMessage() == null ? "" : error.getMessage().toLowerCase();
+        return className.contains("timeout")
+                || message.contains("timed out")
+                || message.contains("timeout");
+    }
+
     private String baseUrl() {
         return "http://" + host + ":" + port;
+    }
+
+    private boolean canReachWithFallback(String method, List<String> paths, int timeoutSeconds) {
+        try {
+            requestWithFallback(method, paths, null, timeoutSeconds);
+            return true;
+        } catch (InterruptedException interrupted) {
+            Thread.currentThread().interrupt();
+            return false;
+        } catch (Exception ignored) {
+            return false;
+        }
     }
 
     private static String encode(String value) {

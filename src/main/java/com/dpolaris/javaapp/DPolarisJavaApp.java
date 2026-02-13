@@ -43,6 +43,8 @@ import java.util.regex.Matcher;
 import java.util.regex.Pattern;
 
 import javax.swing.BorderFactory;
+import javax.swing.Box;
+import javax.swing.BoxLayout;
 import javax.swing.JButton;
 import javax.swing.JComboBox;
 import javax.swing.DefaultListCellRenderer;
@@ -50,10 +52,12 @@ import javax.swing.JComponent;
 import javax.swing.JDialog;
 import javax.swing.JFileChooser;
 import javax.swing.JFrame;
+import javax.swing.JCheckBox;
 import javax.swing.JList;
 import javax.swing.JLabel;
 import javax.swing.JOptionPane;
 import javax.swing.JPanel;
+import javax.swing.JProgressBar;
 import javax.swing.JScrollPane;
 import javax.swing.JSpinner;
 import javax.swing.JSplitPane;
@@ -100,6 +104,7 @@ public final class DPolarisJavaApp {
     private static final Color COLOR_INPUT = new Color(49, 52, 62);
     private static final Color COLOR_MENU_ACTIVE = new Color(64, 86, 133);
     private static final String VIEW_AI_MANAGEMENT = "AI_MANAGEMENT";
+    private static final String VIEW_UNIVERSE_SCAN = "UNIVERSE_SCAN";
     private static final String VIEW_DASHBOARD = "DASHBOARD";
     private static final String VIEW_TRAINING_RUNS = "TRAINING_RUNS";
     private static final String VIEW_PREDICTION_INSPECTOR = "PREDICTION_INSPECTOR";
@@ -109,6 +114,7 @@ public final class DPolarisJavaApp {
 
     private final ApiClient apiClient = new ApiClient("127.0.0.1", 8420);
     private final RunsService runsService = new RunsService(apiClient);
+    private final ScanService scanService = new ScanService(apiClient);
     private final AuditLogStore auditLogStore = new AuditLogStore();
     private final Object trainingAuditLock = new Object();
     private final Font uiFont;
@@ -137,6 +143,11 @@ public final class DPolarisJavaApp {
     private JButton trainButton;
     private JButton stopButton;
     private JLabel trainingStatusValue;
+    private JLabel trainingGuardrailSummaryLabel;
+    private JLabel trainingGuardrailLeakageLabel;
+    private JLabel trainingGuardrailCostsLabel;
+    private JLabel trainingGuardrailWalkForwardLabel;
+    private JLabel trainingGuardrailQualityLabel;
 
     private JTextArea trainingLogArea;
     private JTextArea dataArea;
@@ -157,6 +168,7 @@ public final class DPolarisJavaApp {
     private JTextArea dashboardPredictionArea;
     private JTextArea dashboardInsightsArea;
     private JButton navAiManagementButton;
+    private JButton navUniverseButton;
     private JButton navDashboardButton;
     private JButton navTrainingRunsButton;
     private JButton navPredictionInspectorButton;
@@ -274,6 +286,71 @@ public final class DPolarisJavaApp {
     private JButton auditLogExportButton;
     private JLabel auditLogStatusLabel;
 
+    private JTabbedPane universeMainTabs;
+    private JTabbedPane universeTabs;
+    private JTextField universeSearchField;
+    private JTextField universeSectorFilterField;
+    private JSpinner universeLiquidityFilterSpinner;
+    private JSpinner universeMentionFilterSpinner;
+    private JButton universeRefreshButton;
+    private JButton universeRefreshNowButton;
+    private JButton universeSelectAllButton;
+    private JButton universeClearSelectionButton;
+    private JButton universeExportCsvButton;
+    private JButton universeExportJsonButton;
+    private JButton universeRunScanButton;
+    private JButton universeRunSelectedScanButton;
+    private JLabel universeStatusLabel;
+    private JLabel universeMetaLabel;
+    private JLabel universeHashLabel;
+    private UniverseTableModel universeNasdaqTableModel;
+    private UniverseTableModel universeWsbTableModel;
+    private UniverseTableModel universeCombinedTableModel;
+    private JTable universeNasdaqTable;
+    private JTable universeWsbTable;
+    private JTable universeCombinedTable;
+    private TableRowSorter<UniverseTableModel> universeNasdaqSorter;
+    private TableRowSorter<UniverseTableModel> universeWsbSorter;
+    private TableRowSorter<UniverseTableModel> universeCombinedSorter;
+    private Map<String, Object> universeNasdaqPayload = new LinkedHashMap<>();
+    private Map<String, Object> universeWsbPayload = new LinkedHashMap<>();
+    private Map<String, Object> universeCombinedPayload = new LinkedHashMap<>();
+
+    private JTextField scanRunIdField;
+    private JButton scanLoadResultsButton;
+    private JButton scanRefreshStatusButton;
+    private JButton scanPrevPageButton;
+    private JButton scanNextPageButton;
+    private JSpinner scanPageSpinner;
+    private JComboBox<Integer> scanPageSizeCombo;
+    private JLabel scanResultsStatusLabel;
+    private JProgressBar scanProgressBar;
+    private JLabel scanProgressLabel;
+    private JLabel scanCurrentTickerLabel;
+    private JTable scanResultsTable;
+    private ScanResultsTableModel scanResultsTableModel;
+    private TableRowSorter<ScanResultsTableModel> scanResultsTableSorter;
+    private JTextArea scanWarningsArea;
+    private JTextArea scanExecutiveSummaryArea;
+    private JTextArea scanMarketContextArea;
+    private JTextArea scanPriceVolumeArea;
+    private JTextArea scanOptionsArea;
+    private JTextArea scanRiskArea;
+    private JTextArea scanExplainabilityArea;
+    private JTextArea scanArtifactsArea;
+    private JButton scanDetailsRetryButton;
+    private String activeScanRunId;
+    private String expandedScanTicker;
+    private long scanResultsTotal = 0L;
+    private final Map<String, Map<String, Object>> scanDetailCache = new LinkedHashMap<>();
+    private volatile SwingWorker<Void, Map<String, Object>> activeScanStatusWorker;
+
+    private JButton scanRunsRefreshButton;
+    private JButton scanRunsOpenButton;
+    private JLabel scanRunsStatusLabel;
+    private JTable scanRunsTable;
+    private ScanRunsTableModel scanRunsTableModel;
+
     private volatile SwingWorker<Void, String> activeTrainingWorker;
     private volatile Process backendProcess;
     private volatile boolean backendStarting = false;
@@ -287,6 +364,7 @@ public final class DPolarisJavaApp {
     private volatile String activeTrainingAuditStartedAt;
     private volatile String activeTrainingJobId;
     private volatile boolean activeTrainingAuditFinalized;
+    private volatile String lastScanWarningSignature = "";
 
     public static void main(String[] args) {
         SwingUtilities.invokeLater(() -> {
@@ -369,6 +447,7 @@ public final class DPolarisJavaApp {
         contentPanel = new JPanel(contentLayout);
         contentPanel.setBackground(COLOR_BG);
         contentPanel.add(createAiManagementPanel(), VIEW_AI_MANAGEMENT);
+        contentPanel.add(createUniverseScanPanel(), VIEW_UNIVERSE_SCAN);
         contentPanel.add(createDashboardPanel(), VIEW_DASHBOARD);
         contentPanel.add(createTrainingRunsPanel(), VIEW_TRAINING_RUNS);
         contentPanel.add(createPredictionInspectorPanel(), VIEW_PREDICTION_INSPECTOR);
@@ -386,6 +465,7 @@ public final class DPolarisJavaApp {
         trainButton.addActionListener(e -> startTraining());
         stopButton.addActionListener(e -> stopTraining());
         navAiManagementButton.addActionListener(e -> showView(VIEW_AI_MANAGEMENT));
+        navUniverseButton.addActionListener(e -> showView(VIEW_UNIVERSE_SCAN));
         navDashboardButton.addActionListener(e -> showView(VIEW_DASHBOARD));
         navTrainingRunsButton.addActionListener(e -> showView(VIEW_TRAINING_RUNS));
         navPredictionInspectorButton.addActionListener(e -> showView(VIEW_PREDICTION_INSPECTOR));
@@ -432,6 +512,11 @@ public final class DPolarisJavaApp {
         buttonPanel.add(navAiManagementButton, gbc);
 
         gbc.gridy++;
+        navUniverseButton = new JButton("Universe");
+        styleNavButton(navUniverseButton);
+        buttonPanel.add(navUniverseButton, gbc);
+
+        gbc.gridy++;
         navDashboardButton = new JButton("Dashboard");
         styleNavButton(navDashboardButton);
         buttonPanel.add(navDashboardButton, gbc);
@@ -467,6 +552,1947 @@ public final class DPolarisJavaApp {
         wrap.setBackground(COLOR_BG);
         wrap.add(tabs, BorderLayout.CENTER);
         return wrap;
+    }
+
+    private JPanel createUniverseScanPanel() {
+        universeMainTabs = new JTabbedPane();
+        styleTabbedPane(universeMainTabs);
+        universeMainTabs.addTab("Universe", createUniverseBrowserPanel());
+        universeMainTabs.addTab("Scan Results", createScanResultsPanel());
+        universeMainTabs.addTab("Runs", createScanRunsPanel());
+
+        JPanel wrap = new JPanel(new BorderLayout());
+        wrap.setBackground(COLOR_BG);
+        wrap.add(universeMainTabs, BorderLayout.CENTER);
+        return wrap;
+    }
+
+    private JPanel createUniverseBrowserPanel() {
+        JPanel root = new JPanel(new BorderLayout(8, 8));
+        root.setBackground(COLOR_BG);
+
+        universeSearchField = new JTextField(14);
+        universeSectorFilterField = new JTextField(10);
+        universeLiquidityFilterSpinner = new JSpinner(new SpinnerNumberModel(0.0, 0.0, 1_000_000_000_000.0, 100_000.0));
+        universeMentionFilterSpinner = new JSpinner(new SpinnerNumberModel(0L, 0L, 10_000_000L, 1L));
+        universeRefreshButton = new JButton("Refresh");
+        universeRefreshNowButton = new JButton("Refresh Universe Now");
+        universeSelectAllButton = new JButton("Select All");
+        universeClearSelectionButton = new JButton("Clear");
+        universeExportCsvButton = new JButton("Export CSV");
+        universeExportJsonButton = new JButton("Export JSON");
+        universeRunScanButton = new JButton("Run Deep Learning Scan");
+        universeRunSelectedScanButton = new JButton("Run Selected");
+        universeStatusLabel = new JLabel();
+        universeMetaLabel = new JLabel();
+        universeHashLabel = new JLabel();
+
+        styleInputField(universeSearchField);
+        styleInputField(universeSectorFilterField);
+        styleSpinner(universeLiquidityFilterSpinner);
+        styleSpinner(universeMentionFilterSpinner);
+        styleButton(universeRefreshButton, true);
+        styleButton(universeRefreshNowButton, true);
+        universeRefreshNowButton.setToolTipText("Trigger immediate rebuild of Nasdaq/WSB/Combined universes");
+        styleButton(universeSelectAllButton, true);
+        universeSelectAllButton.setToolTipText("Select every row in the active universe tab");
+        styleButton(universeClearSelectionButton, false);
+        universeClearSelectionButton.setToolTipText("Clear all selections in the active universe tab");
+        styleButton(universeExportCsvButton, false);
+        styleButton(universeExportJsonButton, false);
+        styleButton(universeRunScanButton, true);
+        styleButton(universeRunSelectedScanButton, true);
+        universeRunSelectedScanButton.setToolTipText("Run deep learning scan for selected tickers in active tab");
+        styleInlineStatus(universeStatusLabel, "Universe: idle", COLOR_MUTED);
+        styleInlineStatus(universeMetaLabel, "Last refresh: —", COLOR_MUTED);
+        styleInlineStatus(universeHashLabel, "Hash: —", COLOR_MUTED);
+
+        universeNasdaqTableModel = new UniverseTableModel();
+        universeWsbTableModel = new UniverseTableModel();
+        universeCombinedTableModel = new UniverseTableModel();
+        universeNasdaqTableModel.addTableModelListener(e -> updateUniverseRunButtonState());
+        universeWsbTableModel.addTableModelListener(e -> updateUniverseRunButtonState());
+        universeCombinedTableModel.addTableModelListener(e -> updateUniverseRunButtonState());
+
+        universeNasdaqTable = new JTable(universeNasdaqTableModel);
+        universeWsbTable = new JTable(universeWsbTableModel);
+        universeCombinedTable = new JTable(universeCombinedTableModel);
+        styleRunsTable(universeNasdaqTable);
+        styleRunsTable(universeWsbTable);
+        styleRunsTable(universeCombinedTable);
+        universeNasdaqTable.setSelectionMode(ListSelectionModel.MULTIPLE_INTERVAL_SELECTION);
+        universeWsbTable.setSelectionMode(ListSelectionModel.MULTIPLE_INTERVAL_SELECTION);
+        universeCombinedTable.setSelectionMode(ListSelectionModel.MULTIPLE_INTERVAL_SELECTION);
+
+        universeNasdaqSorter = new TableRowSorter<>(universeNasdaqTableModel);
+        universeWsbSorter = new TableRowSorter<>(universeWsbTableModel);
+        universeCombinedSorter = new TableRowSorter<>(universeCombinedTableModel);
+        universeNasdaqTable.setRowSorter(universeNasdaqSorter);
+        universeWsbTable.setRowSorter(universeWsbSorter);
+        universeCombinedTable.setRowSorter(universeCombinedSorter);
+
+        universeTabs = new JTabbedPane();
+        styleTabbedPane(universeTabs);
+        universeTabs.addTab("Nasdaq", createUniverseTablePane(universeNasdaqTable, "Nasdaq Universe"));
+        universeTabs.addTab("WSB", createUniverseTablePane(universeWsbTable, "WallStreetBets Universe"));
+        universeTabs.addTab("Combined", createUniverseTablePane(universeCombinedTable, "Combined Universe"));
+
+        JPanel filters = new JPanel(new FlowLayout(FlowLayout.LEFT, 8, 0));
+        filters.setOpaque(false);
+        filters.add(createFormLabel("Search"));
+        filters.add(universeSearchField);
+        filters.add(createFormLabel("Sector"));
+        filters.add(universeSectorFilterField);
+        filters.add(createFormLabel("Min Liquidity"));
+        filters.add(universeLiquidityFilterSpinner);
+        filters.add(createFormLabel("Min Mentions"));
+        filters.add(universeMentionFilterSpinner);
+
+        JPanel actionsRow = new JPanel(new FlowLayout(FlowLayout.LEFT, 8, 0));
+        actionsRow.setOpaque(false);
+        actionsRow.add(universeRunSelectedScanButton);
+        actionsRow.add(universeRunScanButton);
+        actionsRow.add(universeSelectAllButton);
+        actionsRow.add(universeClearSelectionButton);
+        actionsRow.add(universeRefreshButton);
+        actionsRow.add(universeRefreshNowButton);
+        actionsRow.add(universeExportCsvButton);
+        actionsRow.add(universeExportJsonButton);
+
+        JPanel metaRow = new JPanel(new FlowLayout(FlowLayout.LEFT, 8, 0));
+        metaRow.setOpaque(false);
+        metaRow.add(universeStatusLabel);
+        metaRow.add(universeMetaLabel);
+        metaRow.add(universeHashLabel);
+
+        JPanel top = createCardPanel();
+        top.add(createSectionHeader("Universe"), BorderLayout.NORTH);
+        JPanel topBody = new JPanel();
+        topBody.setLayout(new BoxLayout(topBody, BoxLayout.Y_AXIS));
+        topBody.setOpaque(false);
+        topBody.add(filters);
+        topBody.add(Box.createVerticalStrut(6));
+        topBody.add(actionsRow);
+        topBody.add(Box.createVerticalStrut(6));
+        topBody.add(metaRow);
+        top.add(topBody, BorderLayout.CENTER);
+
+        universeTabs.addChangeListener(e -> {
+            updateUniverseMetaDisplay();
+            updateUniverseRunButtonState();
+            applyUniverseFilters();
+            ensureUniverseLoaded(false);
+        });
+        universeRefreshButton.addActionListener(e -> ensureUniverseLoaded(true));
+        universeRefreshNowButton.addActionListener(e -> triggerUniverseRefreshNow());
+        universeSelectAllButton.addActionListener(e -> setUniverseSelection(true));
+        universeClearSelectionButton.addActionListener(e -> setUniverseSelection(false));
+        universeExportCsvButton.addActionListener(e -> exportActiveUniverseCsv());
+        universeExportJsonButton.addActionListener(e -> exportActiveUniverseJson());
+        universeRunScanButton.addActionListener(e -> openScanConfigDialog(false));
+        universeRunSelectedScanButton.addActionListener(e -> openScanConfigDialog(true));
+        universeSearchField.getDocument().addDocumentListener(new DocumentListener() {
+            @Override
+            public void insertUpdate(DocumentEvent e) {
+                applyUniverseFilters();
+            }
+
+            @Override
+            public void removeUpdate(DocumentEvent e) {
+                applyUniverseFilters();
+            }
+
+            @Override
+            public void changedUpdate(DocumentEvent e) {
+                applyUniverseFilters();
+            }
+        });
+        universeSectorFilterField.getDocument().addDocumentListener(new DocumentListener() {
+            @Override
+            public void insertUpdate(DocumentEvent e) {
+                applyUniverseFilters();
+            }
+
+            @Override
+            public void removeUpdate(DocumentEvent e) {
+                applyUniverseFilters();
+            }
+
+            @Override
+            public void changedUpdate(DocumentEvent e) {
+                applyUniverseFilters();
+            }
+        });
+        universeLiquidityFilterSpinner.addChangeListener(e -> applyUniverseFilters());
+        universeMentionFilterSpinner.addChangeListener(e -> applyUniverseFilters());
+
+        root.add(top, BorderLayout.NORTH);
+        root.add(universeTabs, BorderLayout.CENTER);
+        refreshUniverseTabTitles();
+        updateUniverseRunButtonState();
+        return root;
+    }
+
+    private JScrollPane createUniverseTablePane(JTable table, String title) {
+        JScrollPane scroll = new JScrollPane(table);
+        scroll.getViewport().setBackground(COLOR_LOG_BG);
+        scroll.setBorder(new CompoundBorder(
+                new LineBorder(COLOR_BORDER, 1, true),
+                new EmptyBorder(4, 4, 4, 4)
+        ));
+        scroll.setColumnHeaderView(createSectionHeader(title));
+        if (table.getColumnModel().getColumnCount() > 0) {
+            table.getColumnModel().getColumn(0).setCellRenderer(table.getDefaultRenderer(Boolean.class));
+            table.getColumnModel().getColumn(0).setCellEditor(table.getDefaultEditor(Boolean.class));
+            table.getColumnModel().getColumn(0).setPreferredWidth(62);
+            table.getColumnModel().getColumn(0).setMaxWidth(72);
+        }
+        return scroll;
+    }
+
+    private JPanel createScanResultsPanel() {
+        JPanel root = new JPanel(new BorderLayout(8, 8));
+        root.setBackground(COLOR_BG);
+
+        scanRunIdField = new JTextField(18);
+        scanLoadResultsButton = new JButton("Load Results");
+        scanRefreshStatusButton = new JButton("Refresh Status");
+        scanPrevPageButton = new JButton("Prev");
+        scanNextPageButton = new JButton("Next");
+        scanPageSpinner = new JSpinner(new SpinnerNumberModel(1, 1, 1_000_000, 1));
+        scanPageSizeCombo = new JComboBox<>(new Integer[]{50, 100, 200, 500});
+        scanResultsStatusLabel = new JLabel();
+        scanProgressBar = new JProgressBar(0, 100);
+        scanProgressLabel = new JLabel();
+        scanCurrentTickerLabel = new JLabel();
+        scanWarningsArea = createLogArea();
+        scanWarningsArea.setLineWrap(true);
+        scanWarningsArea.setWrapStyleWord(true);
+
+        styleInputField(scanRunIdField);
+        styleButton(scanLoadResultsButton, true);
+        styleButton(scanRefreshStatusButton, false);
+        styleButton(scanPrevPageButton, false);
+        styleButton(scanNextPageButton, false);
+        styleSpinner(scanPageSpinner);
+        styleCombo(scanPageSizeCombo);
+        styleInlineStatus(scanResultsStatusLabel, "Scan results: idle", COLOR_MUTED);
+        styleInlineStatus(scanProgressLabel, "Progress: —", COLOR_MUTED);
+        styleInlineStatus(scanCurrentTickerLabel, "Ticker: —", COLOR_MUTED);
+        scanProgressBar.setStringPainted(true);
+        scanProgressBar.setValue(0);
+        scanProgressBar.setForeground(COLOR_ACCENT);
+        scanProgressBar.setBackground(COLOR_INPUT);
+
+        JPanel controls = new JPanel(new FlowLayout(FlowLayout.LEFT, 8, 0));
+        controls.setOpaque(false);
+        controls.add(createFormLabel("Run ID"));
+        controls.add(scanRunIdField);
+        controls.add(createFormLabel("Page"));
+        controls.add(scanPageSpinner);
+        controls.add(createFormLabel("Page Size"));
+        controls.add(scanPageSizeCombo);
+        controls.add(scanPrevPageButton);
+        controls.add(scanNextPageButton);
+        controls.add(scanLoadResultsButton);
+        controls.add(scanRefreshStatusButton);
+        controls.add(scanResultsStatusLabel);
+
+        JPanel progressRow = new JPanel(new BorderLayout(8, 0));
+        progressRow.setOpaque(false);
+        progressRow.add(scanProgressBar, BorderLayout.CENTER);
+        JPanel progressMeta = new JPanel(new FlowLayout(FlowLayout.LEFT, 8, 0));
+        progressMeta.setOpaque(false);
+        progressMeta.add(scanProgressLabel);
+        progressMeta.add(scanCurrentTickerLabel);
+        progressRow.add(progressMeta, BorderLayout.EAST);
+
+        JPanel top = createCardPanel();
+        top.add(createSectionHeader("Deep Learning Scan"), BorderLayout.NORTH);
+        JPanel topBody = new JPanel(new BorderLayout(0, 8));
+        topBody.setOpaque(false);
+        topBody.add(controls, BorderLayout.NORTH);
+        topBody.add(progressRow, BorderLayout.CENTER);
+        top.add(topBody, BorderLayout.CENTER);
+
+        scanResultsTableModel = new ScanResultsTableModel();
+        scanResultsTable = new JTable(scanResultsTableModel);
+        styleRunsTable(scanResultsTable);
+        scanResultsTable.setSelectionMode(ListSelectionModel.SINGLE_SELECTION);
+        scanResultsTableSorter = new TableRowSorter<>(scanResultsTableModel);
+        scanResultsTable.setRowSorter(scanResultsTableSorter);
+        scanResultsTableSorter.setComparator(2, (a, b) -> Double.compare(parseSortableDouble(a), parseSortableDouble(b)));
+        scanResultsTableSorter.setComparator(7, (a, b) -> Double.compare(parseSortableDouble(a), parseSortableDouble(b)));
+        scanResultsTableSorter.setComparator(8, (a, b) -> Integer.compare(parseSortableInt(a), parseSortableInt(b)));
+        scanResultsTable.addMouseListener(new MouseAdapter() {
+            @Override
+            public void mouseClicked(MouseEvent e) {
+                int row = scanResultsTable.rowAtPoint(e.getPoint());
+                int col = scanResultsTable.columnAtPoint(e.getPoint());
+                if (row < 0) {
+                    return;
+                }
+                if (e.getClickCount() >= 2 || col == 0) {
+                    int modelRow = scanResultsTable.convertRowIndexToModel(row);
+                    toggleScanDetails(modelRow);
+                }
+            }
+        });
+
+        JScrollPane tableScroll = new JScrollPane(scanResultsTable);
+        tableScroll.getViewport().setBackground(COLOR_LOG_BG);
+        tableScroll.setBorder(new CompoundBorder(
+                new LineBorder(COLOR_BORDER, 1, true),
+                new EmptyBorder(4, 4, 4, 4)
+        ));
+        tableScroll.setColumnHeaderView(createSectionHeader("Scan Results (Expandable Rows)"));
+
+        scanExecutiveSummaryArea = createRunDetailsArea();
+        scanMarketContextArea = createRunDetailsArea();
+        scanPriceVolumeArea = createRunDetailsArea();
+        scanOptionsArea = createRunDetailsArea();
+        scanRiskArea = createRunDetailsArea();
+        scanExplainabilityArea = createRunDetailsArea();
+        scanArtifactsArea = createRunDetailsArea();
+        scanDetailsRetryButton = new JButton("Retry Detail Fetch");
+        styleButton(scanDetailsRetryButton, false);
+        scanDetailsRetryButton.addActionListener(e -> retrySelectedScanDetail());
+
+        JTabbedPane detailsTabs = new JTabbedPane();
+        styleTabbedPane(detailsTabs);
+        detailsTabs.addTab("Executive Summary", createLogScrollPane(scanExecutiveSummaryArea, "Executive Summary"));
+        detailsTabs.addTab("Market Context", createLogScrollPane(scanMarketContextArea, "Market Context"));
+        detailsTabs.addTab("Price/Volume Signals", createLogScrollPane(scanPriceVolumeArea, "Price/Volume Signals"));
+        detailsTabs.addTab("Option Candidates", createLogScrollPane(scanOptionsArea, "Option Trade Candidates"));
+        detailsTabs.addTab("Risk Notes", createLogScrollPane(scanRiskArea, "Risk Notes"));
+        detailsTabs.addTab("Why This", createLogScrollPane(scanExplainabilityArea, "Explainability"));
+        detailsTabs.addTab("Artifacts", createLogScrollPane(scanArtifactsArea, "Artifacts / Raw JSON"));
+
+        JPanel detailsHeader = new JPanel(new FlowLayout(FlowLayout.LEFT, 8, 0));
+        detailsHeader.setOpaque(false);
+        detailsHeader.add(scanDetailsRetryButton);
+        detailsHeader.add(createHintLabel("Expand a row to lazy-load full analysis."));
+
+        JPanel detailsCard = createCardPanel();
+        detailsCard.add(createSectionHeader("Expanded Analysis"), BorderLayout.NORTH);
+        JPanel detailsBody = new JPanel(new BorderLayout(0, 8));
+        detailsBody.setOpaque(false);
+        detailsBody.add(detailsHeader, BorderLayout.NORTH);
+        detailsBody.add(detailsTabs, BorderLayout.CENTER);
+        detailsCard.add(detailsBody, BorderLayout.CENTER);
+
+        JScrollPane warningsScroll = createLogScrollPane(scanWarningsArea, "Warnings / Errors");
+        JSplitPane lowerSplit = new JSplitPane(JSplitPane.HORIZONTAL_SPLIT, detailsCard, warningsScroll);
+        lowerSplit.setResizeWeight(0.78);
+        lowerSplit.setDividerLocation(850);
+        lowerSplit.setBorder(BorderFactory.createEmptyBorder());
+        lowerSplit.setBackground(COLOR_BG);
+
+        JSplitPane mainSplit = new JSplitPane(JSplitPane.VERTICAL_SPLIT, tableScroll, lowerSplit);
+        mainSplit.setResizeWeight(0.52);
+        mainSplit.setDividerLocation(310);
+        mainSplit.setBorder(BorderFactory.createEmptyBorder());
+        mainSplit.setBackground(COLOR_BG);
+
+        scanLoadResultsButton.addActionListener(e -> loadScanResults(true));
+        scanRefreshStatusButton.addActionListener(e -> refreshScanStatusOnce());
+        scanPrevPageButton.addActionListener(e -> stepScanPage(-1));
+        scanNextPageButton.addActionListener(e -> stepScanPage(1));
+
+        root.add(top, BorderLayout.NORTH);
+        root.add(mainSplit, BorderLayout.CENTER);
+        clearScanDetails("Select a scan result row to view expanded analysis.");
+        return root;
+    }
+
+    private JPanel createScanRunsPanel() {
+        JPanel root = new JPanel(new BorderLayout(8, 8));
+        root.setBackground(COLOR_BG);
+
+        scanRunsRefreshButton = new JButton("Refresh");
+        scanRunsOpenButton = new JButton("Open Selected Run");
+        scanRunsStatusLabel = new JLabel();
+        styleButton(scanRunsRefreshButton, true);
+        styleButton(scanRunsOpenButton, false);
+        styleInlineStatus(scanRunsStatusLabel, "Scan runs: idle", COLOR_MUTED);
+
+        JPanel actions = new JPanel(new FlowLayout(FlowLayout.LEFT, 8, 0));
+        actions.setOpaque(false);
+        actions.add(scanRunsRefreshButton);
+        actions.add(scanRunsOpenButton);
+        actions.add(scanRunsStatusLabel);
+
+        scanRunsTableModel = new ScanRunsTableModel();
+        scanRunsTable = new JTable(scanRunsTableModel);
+        styleRunsTable(scanRunsTable);
+        scanRunsTable.setSelectionMode(ListSelectionModel.SINGLE_SELECTION);
+        scanRunsTable.addMouseListener(new MouseAdapter() {
+            @Override
+            public void mouseClicked(MouseEvent e) {
+                if (e.getClickCount() >= 2) {
+                    openSelectedScanRun();
+                }
+            }
+        });
+
+        JScrollPane tableScroll = new JScrollPane(scanRunsTable);
+        tableScroll.getViewport().setBackground(COLOR_LOG_BG);
+        tableScroll.setBorder(new CompoundBorder(
+                new LineBorder(COLOR_BORDER, 1, true),
+                new EmptyBorder(4, 4, 4, 4)
+        ));
+        tableScroll.setColumnHeaderView(createSectionHeader("Scan Runs History"));
+
+        scanRunsRefreshButton.addActionListener(e -> loadScanRuns(true));
+        scanRunsOpenButton.addActionListener(e -> openSelectedScanRun());
+
+        root.add(actions, BorderLayout.NORTH);
+        root.add(tableScroll, BorderLayout.CENTER);
+        return root;
+    }
+
+    private void ensureUniverseLoaded(boolean forceRefresh) {
+        if (universeTabs == null) {
+            return;
+        }
+        String universeId = activeUniverseId();
+        UniverseTableModel model = activeUniverseModel();
+        if (!forceRefresh && model != null && model.getRowCount() > 0) {
+            updateUniverseMetaDisplay();
+            applyUniverseFilters();
+            return;
+        }
+        loadUniverse(universeId, forceRefresh);
+    }
+
+    private void loadUniverse(String universeId, boolean forceRefresh) {
+        if (universeStatusLabel != null) {
+            styleInlineStatus(universeStatusLabel, "Universe: loading " + universeId + "...", COLOR_WARNING);
+        }
+
+        SwingWorker<Map<String, Object>, Void> worker = new SwingWorker<>() {
+            @Override
+            protected Map<String, Object> doInBackground() throws Exception {
+                return scanService.getUniverse(universeId, forceRefresh);
+            }
+
+            @Override
+            protected void done() {
+                try {
+                    Map<String, Object> payload = get();
+                    List<UniverseRow> rows = parseUniverseRows(payload);
+                    switch (universeId) {
+                        case "nasdaq_top_500" -> {
+                            universeNasdaqPayload = payload;
+                            if (universeNasdaqTableModel != null) {
+                                universeNasdaqTableModel.setRows(rows);
+                            }
+                        }
+                        case "wsb_top_500" -> {
+                            universeWsbPayload = payload;
+                            if (universeWsbTableModel != null) {
+                                universeWsbTableModel.setRows(rows);
+                            }
+                        }
+                        default -> {
+                            universeCombinedPayload = payload;
+                            if (universeCombinedTableModel != null) {
+                                universeCombinedTableModel.setRows(rows);
+                            }
+                        }
+                    }
+                    applyUniverseFilters();
+                    refreshUniverseTabTitles();
+                    updateUniverseMetaDisplay();
+                    updateUniverseRunButtonState();
+                    int requested = resolveUniverseRequestedCount(payload);
+                    int returned = rows.size();
+                    Color loadColor = requested > 0 && returned < requested ? COLOR_WARNING : COLOR_SUCCESS;
+                    String loadText = requested > 0
+                            ? "Universe: loaded " + returned + "/" + requested + " tickers (" + universeId + ")"
+                            : "Universe: loaded " + returned + " tickers (" + universeId + ")";
+                    styleInlineStatus(
+                            universeStatusLabel,
+                            loadText,
+                            loadColor
+                    );
+                } catch (Exception ex) {
+                    styleInlineStatus(universeStatusLabel, "Universe: load failed", COLOR_DANGER);
+                    updateUniverseMetaDisplay();
+                    JOptionPane.showMessageDialog(
+                            frame,
+                            "Failed to load " + universeId + ":\n" + humanizeError(ex),
+                            "Universe Load Failed",
+                            JOptionPane.ERROR_MESSAGE
+                    );
+                }
+            }
+        };
+        worker.execute();
+    }
+
+    private void refreshUniverseTabTitles() {
+        if (universeTabs == null || universeTabs.getTabCount() < 3) {
+            return;
+        }
+        universeTabs.setTitleAt(
+                0,
+                buildUniverseTabTitle("Nasdaq", universeNasdaqPayload, universeNasdaqTableModel)
+        );
+        universeTabs.setTitleAt(
+                1,
+                buildUniverseTabTitle("WSB", universeWsbPayload, universeWsbTableModel)
+        );
+        universeTabs.setTitleAt(
+                2,
+                buildUniverseTabTitle("Combined", universeCombinedPayload, universeCombinedTableModel)
+        );
+    }
+
+    private String buildUniverseTabTitle(
+            String base,
+            Map<String, Object> payload,
+            UniverseTableModel model
+    ) {
+        int requested = resolveUniverseRequestedCount(payload);
+        int returned = resolveUniverseReturnedCount(payload, model);
+        if (requested > 0 && returned >= 0) {
+            return base + " (" + returned + "/" + requested + ")";
+        }
+        if (returned >= 0) {
+            return base + " (" + returned + ")";
+        }
+        return base;
+    }
+
+    private int resolveUniverseRequestedCount(Map<String, Object> payload) {
+        if (payload == null || payload.isEmpty()) {
+            return -1;
+        }
+        long value = asLong(findAnyValue(
+                payload,
+                "top_n_requested",
+                "requested_count",
+                "target_count",
+                "requested"
+        ));
+        return value > 0 ? (int) value : -1;
+    }
+
+    private int resolveUniverseReturnedCount(Map<String, Object> payload, UniverseTableModel model) {
+        if (payload != null && !payload.isEmpty()) {
+            long explicit = asLong(findAnyValue(
+                    payload,
+                    "top_n_returned",
+                    "returned_count",
+                    "count",
+                    "total"
+            ));
+            if (explicit > 0) {
+                return (int) explicit;
+            }
+            Object listCandidate = findAnyValue(
+                    payload,
+                    "tickers",
+                    "merged",
+                    "nasdaq_top_500",
+                    "wsb_top_500",
+                    "items",
+                    "rows",
+                    "members",
+                    "data"
+            );
+            if (listCandidate instanceof List<?> list) {
+                return list.size();
+            }
+        }
+        if (model != null) {
+            return model.getRowCount();
+        }
+        return -1;
+    }
+
+    private void triggerUniverseRefreshNow() {
+        configureClientFromUI();
+        if (universeRefreshNowButton != null) {
+            universeRefreshNowButton.setEnabled(false);
+        }
+        if (universeRefreshButton != null) {
+            universeRefreshButton.setEnabled(false);
+        }
+        styleInlineStatus(universeStatusLabel, "Universe: rebuilding from sources...", COLOR_WARNING);
+
+        SwingWorker<Map<String, Object>, Void> worker = new SwingWorker<>() {
+            @Override
+            protected Map<String, Object> doInBackground() throws Exception {
+                return scanService.refreshUniverseNow();
+            }
+
+            @Override
+            protected void done() {
+                if (universeRefreshNowButton != null) {
+                    universeRefreshNowButton.setEnabled(true);
+                }
+                if (universeRefreshButton != null) {
+                    universeRefreshButton.setEnabled(true);
+                }
+                try {
+                    Map<String, Object> response = get();
+                    styleInlineStatus(universeStatusLabel, "Universe: rebuild complete, reloading...", COLOR_SUCCESS);
+                    loadUniverse("nasdaq_top_500", true);
+                    loadUniverse("wsb_top_500", true);
+                    loadUniverse("combined_1000", true);
+                    appendBackendLog(ts() + " | Universe refresh completed: "
+                            + firstNonBlank(stringOrEmpty(findAnyValue(response, "status")), "ok"));
+                } catch (Exception ex) {
+                    styleInlineStatus(universeStatusLabel, "Universe: rebuild failed", COLOR_DANGER);
+                    JOptionPane.showMessageDialog(
+                            frame,
+                            "Failed to refresh universe now:\n" + humanizeError(ex)
+                                    + "\n\nThis requires backend endpoint: POST /api/scheduler/run/universe",
+                            "Universe Refresh Failed",
+                            JOptionPane.ERROR_MESSAGE
+                    );
+                }
+            }
+        };
+        worker.execute();
+    }
+
+    private List<UniverseRow> parseUniverseRows(Map<String, Object> payload) {
+        Object listCandidate = findAnyValue(payload,
+                "tickers",
+                "merged",
+                "nasdaq_top_500",
+                "wsb_top_500",
+                "symbols",
+                "items",
+                "rows",
+                "constituents",
+                "members",
+                "data");
+        List<UniverseRow> rows = new ArrayList<>();
+        if (listCandidate instanceof List<?> list) {
+            for (Object item : list) {
+                if (item instanceof Map<?, ?> mapRaw) {
+                    Map<String, Object> map = Json.asObject(mapRaw);
+                    String ticker = firstNonBlank(
+                            stringOrEmpty(findAnyValue(map, "ticker", "symbol", "id")),
+                            ""
+                    ).toUpperCase();
+                    if (ticker.isBlank()) {
+                        continue;
+                    }
+                    String name = firstNonBlank(
+                            stringOrEmpty(findAnyValue(map, "name", "company_name", "company", "title")),
+                            "—"
+                    );
+                    String sector = firstNonBlank(
+                            stringOrEmpty(findAnyValue(map, "sector", "industry_sector", "gics_sector")),
+                            "—"
+                    );
+                    Double marketCap = asNullableDouble(findAnyValue(map, "market_cap", "marketcap", "mcap"));
+                    Double avgDollarVolume = asNullableDouble(findAnyValue(map,
+                            "avg_dollar_volume",
+                            "average_dollar_volume",
+                            "avg_dollar_vol",
+                            "dollar_volume",
+                            "liquidity"));
+                    Long mentionCount = asLong(findAnyValue(map, "mention_count", "mentions", "count"));
+                    rows.add(new UniverseRow(false, ticker, name, sector, marketCap, avgDollarVolume, mentionCount, map));
+                } else if (item != null) {
+                    String ticker = String.valueOf(item).trim().toUpperCase();
+                    if (!ticker.isBlank()) {
+                        rows.add(new UniverseRow(false, ticker, "—", "—", null, null, null,
+                                Map.of("ticker", ticker)));
+                    }
+                }
+            }
+        }
+        rows.sort(Comparator.comparing(UniverseRow::ticker));
+        return rows;
+    }
+
+    private void updateUniverseMetaDisplay() {
+        Map<String, Object> payload = activeUniversePayload();
+        String generatedAt = firstNonBlank(
+                stringOrEmpty(findAnyValue(payload, "generated_at", "generatedAt", "refreshed_at", "updated_at")),
+                "—"
+        );
+        String hash = firstNonBlank(stringOrEmpty(findAnyValue(payload, "universe_hash", "hash")), "—");
+        styleInlineStatus(universeMetaLabel, "Last refresh: " + generatedAt, COLOR_MUTED);
+        styleInlineStatus(universeHashLabel, "Hash: " + hash, COLOR_MUTED);
+    }
+
+    private void updateUniverseRunButtonState() {
+        if (universeRunScanButton == null || universeRunSelectedScanButton == null) {
+            return;
+        }
+        UniverseTableModel activeModel = activeUniverseModel();
+        String universeId = activeUniverseId();
+        int totalRows = activeModel == null ? 0 : activeModel.getRowCount();
+        int selectedRows = activeModel == null ? 0 : activeModel.selectedRows().size();
+        boolean hasRows = totalRows > 0;
+
+        universeRunScanButton.setEnabled(hasRows);
+        universeRunSelectedScanButton.setEnabled(hasRows && selectedRows > 0);
+        universeRunSelectedScanButton.setText(
+                selectedRows > 0 ? "Run Selected (" + selectedRows + ")" : "Run Selected"
+        );
+
+        if (!hasRows) {
+            universeRunScanButton.setToolTipText("Load universe data first.");
+            universeRunSelectedScanButton.setToolTipText("Load universe data first.");
+            return;
+        }
+
+        universeRunScanButton.setToolTipText(
+                "Run deep learning scan for active universe: " + universeId + " (rows: " + totalRows + ")."
+        );
+        if (selectedRows > 0) {
+            universeRunSelectedScanButton.setToolTipText(
+                    "Run deep learning scan for selected tickers: " + selectedRows + " (" + universeId + ")."
+            );
+        } else {
+            universeRunSelectedScanButton.setToolTipText(
+                    "Select at least one ticker in the active tab to use this action."
+            );
+        }
+    }
+
+    private void applyUniverseFilters() {
+        UniverseTableModel model = activeUniverseModel();
+        TableRowSorter<UniverseTableModel> sorter = activeUniverseSorter();
+        JTable table = activeUniverseTable();
+        if (model == null || sorter == null || table == null) {
+            return;
+        }
+
+        String search = universeSearchField == null ? "" : universeSearchField.getText().trim().toLowerCase();
+        String sectorFilter = universeSectorFilterField == null
+                ? ""
+                : universeSectorFilterField.getText().trim().toLowerCase();
+        double minLiquidity = universeLiquidityFilterSpinner == null
+                ? 0.0
+                : Json.asDouble(universeLiquidityFilterSpinner.getValue(), 0.0);
+        long minMentions = universeMentionFilterSpinner == null
+                ? 0L
+                : Math.max(0L, Json.asInt(universeMentionFilterSpinner.getValue(), 0));
+
+        sorter.setRowFilter(new RowFilter<>() {
+            @Override
+            public boolean include(Entry<? extends UniverseTableModel, ? extends Integer> entry) {
+                UniverseRow row = model.getRow(entry.getIdentifier());
+                if (row == null) {
+                    return false;
+                }
+                if (!search.isBlank()) {
+                    String haystack = (safeLower(row.ticker()) + " "
+                            + safeLower(row.name()) + " "
+                            + safeLower(row.sector()));
+                    if (!haystack.contains(search)) {
+                        return false;
+                    }
+                }
+                if (!sectorFilter.isBlank() && !safeLower(row.sector()).contains(sectorFilter)) {
+                    return false;
+                }
+                if (minLiquidity > 0.0) {
+                    Double liquidity = row.avgDollarVolume();
+                    if (liquidity == null || liquidity < minLiquidity) {
+                        return false;
+                    }
+                }
+                if (minMentions > 0L) {
+                    Long mentions = row.mentionCount();
+                    if (mentions == null || mentions < minMentions) {
+                        return false;
+                    }
+                }
+                return true;
+            }
+        });
+
+        styleInlineStatus(
+                universeStatusLabel,
+                "Universe: " + table.getRowCount() + " / " + model.getRowCount() + " visible",
+                COLOR_MUTED
+        );
+    }
+
+    private void setUniverseSelection(boolean selected) {
+        UniverseTableModel model = activeUniverseModel();
+        if (model == null) {
+            return;
+        }
+        if (model.getRowCount() == 0) {
+            return;
+        }
+        for (int modelRow = 0; modelRow < model.getRowCount(); modelRow++) {
+            model.setSelected(modelRow, selected);
+        }
+        styleInlineStatus(
+                universeStatusLabel,
+                selected
+                        ? "Universe: selected all " + model.getRowCount() + " rows in active tab"
+                        : "Universe: selection cleared",
+                selected ? COLOR_SUCCESS : COLOR_MUTED
+        );
+        updateUniverseRunButtonState();
+    }
+
+    private void exportActiveUniverseCsv() {
+        UniverseTableModel model = activeUniverseModel();
+        if (model == null || model.getRowCount() == 0) {
+            styleInlineStatus(universeStatusLabel, "Universe: nothing to export", COLOR_WARNING);
+            return;
+        }
+        JFileChooser chooser = new JFileChooser();
+        chooser.setDialogTitle("Export universe CSV");
+        chooser.setSelectedFile(new File(activeUniverseId() + ".csv"));
+        if (chooser.showSaveDialog(frame) != JFileChooser.APPROVE_OPTION) {
+            return;
+        }
+        File file = chooser.getSelectedFile();
+        if (file == null) {
+            return;
+        }
+        List<UniverseRow> rows = model.selectedRows();
+        if (rows.isEmpty()) {
+            rows = model.rows();
+        }
+
+        StringBuilder csv = new StringBuilder();
+        csv.append("ticker,name,sector,market_cap,avg_dollar_volume,mention_count\n");
+        for (UniverseRow row : rows) {
+            csv.append(csvCell(row.ticker())).append(",");
+            csv.append(csvCell(row.name())).append(",");
+            csv.append(csvCell(row.sector())).append(",");
+            csv.append(csvCell(row.marketCap() == null ? "" : String.valueOf(row.marketCap()))).append(",");
+            csv.append(csvCell(row.avgDollarVolume() == null ? "" : String.valueOf(row.avgDollarVolume()))).append(",");
+            csv.append(csvCell(row.mentionCount() == null ? "" : String.valueOf(row.mentionCount()))).append("\n");
+        }
+        try {
+            Files.writeString(file.toPath(), csv.toString(), StandardCharsets.UTF_8);
+            styleInlineStatus(universeStatusLabel, "Universe CSV exported: " + file.getName(), COLOR_SUCCESS);
+        } catch (Exception ex) {
+            styleInlineStatus(universeStatusLabel, "Universe CSV export failed", COLOR_DANGER);
+            JOptionPane.showMessageDialog(
+                    frame,
+                    "Failed to export CSV:\n" + humanizeError(ex),
+                    "Export Failed",
+                    JOptionPane.ERROR_MESSAGE
+            );
+        }
+    }
+
+    private void exportActiveUniverseJson() {
+        Map<String, Object> payload = activeUniversePayload();
+        if (payload == null || payload.isEmpty()) {
+            styleInlineStatus(universeStatusLabel, "Universe: no JSON payload to export", COLOR_WARNING);
+            return;
+        }
+        JFileChooser chooser = new JFileChooser();
+        chooser.setDialogTitle("Export universe JSON");
+        chooser.setSelectedFile(new File(activeUniverseId() + ".json"));
+        if (chooser.showSaveDialog(frame) != JFileChooser.APPROVE_OPTION) {
+            return;
+        }
+        File file = chooser.getSelectedFile();
+        if (file == null) {
+            return;
+        }
+        try {
+            Files.writeString(file.toPath(), Json.pretty(payload), StandardCharsets.UTF_8);
+            styleInlineStatus(universeStatusLabel, "Universe JSON exported: " + file.getName(), COLOR_SUCCESS);
+        } catch (Exception ex) {
+            styleInlineStatus(universeStatusLabel, "Universe JSON export failed", COLOR_DANGER);
+            JOptionPane.showMessageDialog(
+                    frame,
+                    "Failed to export JSON:\n" + humanizeError(ex),
+                    "Export Failed",
+                    JOptionPane.ERROR_MESSAGE
+            );
+        }
+    }
+
+    private void openScanConfigDialog(boolean selectedOnly) {
+        UniverseTableModel activeModel = activeUniverseModel();
+        String universeId = activeUniverseId();
+        if (activeModel == null || activeModel.getRowCount() == 0) {
+            JOptionPane.showMessageDialog(
+                    frame,
+                    "Universe is empty. Refresh it first.",
+                    "Run Deep Learning Scan",
+                    JOptionPane.WARNING_MESSAGE
+            );
+            return;
+        }
+
+        List<String> selectedTickers = selectedTickersFromModel(activeModel);
+        if (selectedOnly && selectedTickers.isEmpty()) {
+            JOptionPane.showMessageDialog(
+                    frame,
+                    "No tickers selected in the active tab. Use the Select All button or check rows first.",
+                    "Run Selected Tickers",
+                    JOptionPane.WARNING_MESSAGE
+            );
+            return;
+        }
+
+        int availableTickers = activeModel.getRowCount();
+        int selectedCount = selectedTickers.size();
+        int maxSelectable = selectedOnly ? Math.max(1, selectedCount) : Math.max(1, availableTickers);
+        int defaultMaxTickers = selectedOnly
+                ? maxSelectable
+                : Math.min(maxSelectable, Math.max(1000, selectedCount));
+
+        JTextField horizonsField = new JTextField("1d,3d,5d", 18);
+        JCheckBox optionsModeCheck = new JCheckBox("Options mode", true);
+        optionsModeCheck.setOpaque(false);
+        optionsModeCheck.setForeground(COLOR_TEXT);
+        JTextField strategiesField = new JTextField("single-leg,vertical-spread", 22);
+        JComboBox<String> riskModeCombo = new JComboBox<>(new String[]{"conservative", "standard", "aggressive"});
+        JSpinner maxTickersSpinner = new JSpinner(new SpinnerNumberModel(defaultMaxTickers, 1, maxSelectable, 1));
+        styleInputField(horizonsField);
+        styleInputField(strategiesField);
+        styleCombo(riskModeCombo);
+        styleSpinner(maxTickersSpinner);
+
+        JPanel panel = new JPanel(new GridBagLayout());
+        panel.setBackground(COLOR_CARD);
+        panel.setBorder(new EmptyBorder(10, 10, 10, 10));
+        GridBagConstraints gbc = new GridBagConstraints();
+        gbc.gridx = 0;
+        gbc.gridy = 0;
+        gbc.insets = new Insets(4, 4, 4, 8);
+        gbc.anchor = GridBagConstraints.WEST;
+        panel.add(createFormLabel("Universe"), gbc);
+        gbc.gridx = 1;
+        panel.add(createFormLabel(universeId + " (" + availableTickers + " rows)"), gbc);
+        gbc.gridx = 0;
+        gbc.gridy++;
+        panel.add(createFormLabel("Selection"), gbc);
+        gbc.gridx = 1;
+        panel.add(createFormLabel(selectedOnly ? (selectedCount + " selected only") : (selectedCount + " selected (or all)")), gbc);
+        gbc.gridx = 0;
+        gbc.gridy++;
+        panel.add(createFormLabel("Horizons"), gbc);
+        gbc.gridx = 1;
+        panel.add(horizonsField, gbc);
+        gbc.gridx = 0;
+        gbc.gridy++;
+        panel.add(createFormLabel("Strategy Set"), gbc);
+        gbc.gridx = 1;
+        panel.add(strategiesField, gbc);
+        gbc.gridx = 0;
+        gbc.gridy++;
+        panel.add(createFormLabel("Risk Mode"), gbc);
+        gbc.gridx = 1;
+        panel.add(riskModeCombo, gbc);
+        gbc.gridx = 0;
+        gbc.gridy++;
+        panel.add(createFormLabel("Max Tickers (" + maxSelectable + " max)"), gbc);
+        gbc.gridx = 1;
+        panel.add(maxTickersSpinner, gbc);
+        gbc.gridx = 0;
+        gbc.gridy++;
+        gbc.gridwidth = 2;
+        panel.add(optionsModeCheck, gbc);
+
+        int choice = JOptionPane.showConfirmDialog(
+                frame,
+                panel,
+                selectedOnly ? "Run Deep Learning Scan (Selected)" : "Run Deep Learning Scan",
+                JOptionPane.OK_CANCEL_OPTION,
+                JOptionPane.PLAIN_MESSAGE
+        );
+        if (choice != JOptionPane.OK_OPTION) {
+            return;
+        }
+
+        int maxTickers = Math.max(1, Json.asInt(maxTickersSpinner.getValue(), defaultMaxTickers));
+        List<String> horizons = parseCsvTokens(horizonsField.getText());
+        List<String> strategies = parseCsvTokens(strategiesField.getText());
+        String riskMode = String.valueOf(riskModeCombo.getSelectedItem());
+        boolean optionsMode = optionsModeCheck.isSelected();
+
+        List<String> baseTickers;
+        if (selectedOnly) {
+            baseTickers = selectedTickers;
+        } else if (!selectedTickers.isEmpty()) {
+            baseTickers = selectedTickers;
+        } else {
+            baseTickers = allTickersFromModel(activeModel);
+        }
+        List<String> tickers = baseTickers.size() > maxTickers
+                ? new ArrayList<>(baseTickers.subList(0, maxTickers))
+                : new ArrayList<>(baseTickers);
+        if (tickers.isEmpty()) {
+            JOptionPane.showMessageDialog(
+                    frame,
+                    "No tickers selected for scan.",
+                    "Run Deep Learning Scan",
+                    JOptionPane.WARNING_MESSAGE
+            );
+            return;
+        }
+
+        Map<String, Object> horizonConfig = new LinkedHashMap<>();
+        horizonConfig.put("horizons", horizons);
+        Map<String, Object> strategyConfig = new LinkedHashMap<>();
+        strategyConfig.put("tickers", tickers);
+        strategyConfig.put("strategies", strategies);
+        strategyConfig.put("max_tickers", maxTickers);
+        strategyConfig.put("selection_mode", selectedOnly ? "selected_only" : "selected_or_all");
+        strategyConfig.put("selected_count", selectedCount);
+        Map<String, Object> riskConfig = new LinkedHashMap<>();
+        riskConfig.put("mode", riskMode);
+
+        Map<String, Object> payload = new LinkedHashMap<>();
+        payload.put("universe", universeId);
+        payload.put("runMode", "scan");
+        payload.put("horizonConfig", horizonConfig);
+        payload.put("optionsMode", optionsMode);
+        payload.put("strategyUniverseConfig", strategyConfig);
+        payload.put("riskConfig", riskConfig);
+        startDeepLearningScan(payload);
+    }
+
+    private void startDeepLearningScan(Map<String, Object> payload) {
+        configureClientFromUI();
+        universeRunScanButton.setEnabled(false);
+        if (universeRunSelectedScanButton != null) {
+            universeRunSelectedScanButton.setEnabled(false);
+        }
+        if (universeMainTabs != null) {
+            universeMainTabs.setSelectedIndex(1);
+        }
+        styleInlineStatus(universeStatusLabel, "Universe: starting scan...", COLOR_WARNING);
+        styleInlineStatus(scanResultsStatusLabel, "Scan results: submitting start request...", COLOR_WARNING);
+        appendScanWarningLog("Submitting scan request to " + currentHostPort());
+        Object strategyConfig = payload == null ? null : payload.get("strategyUniverseConfig");
+        int requestedTickers = -1;
+        if (strategyConfig instanceof Map<?, ?> strategyMap) {
+            Object tickerObj = Json.asObject(strategyMap).get("tickers");
+            if (tickerObj instanceof List<?> tickerList) {
+                requestedTickers = tickerList.size();
+            }
+        }
+        if (requestedTickers >= 0) {
+            appendScanWarningLog("Requested tickers: " + requestedTickers);
+        }
+
+        SwingWorker<Map<String, Object>, Void> worker = new SwingWorker<>() {
+            @Override
+            protected Map<String, Object> doInBackground() throws Exception {
+                appendScanWarningLog("Preflight check: /health");
+                if (!healthCheckWithRetries(3, 2, 250L)) {
+                    throw new IOException(
+                            "Backend is not reachable at "
+                                    + currentHostPort()
+                                    + ". Start AI Backend first."
+                    );
+                }
+                appendScanWarningLog("POST /scan/start");
+                return scanService.startScan(payload);
+            }
+
+            @Override
+            protected void done() {
+                universeRunScanButton.setEnabled(true);
+                updateUniverseRunButtonState();
+                try {
+                    Map<String, Object> response = get();
+                    String runId = firstNonBlank(
+                            stringOrEmpty(findAnyValue(response, "run_id", "runId", "id")),
+                            extractRunId(response)
+                    );
+                    if (runId.isBlank()) {
+                        throw new IOException("scan start response did not include runId");
+                    }
+                    lastScanWarningSignature = "";
+                    activeScanRunId = runId;
+                    scanRunIdField.setText(runId);
+                    scanDetailCache.clear();
+                    expandedScanTicker = null;
+                    clearScanDetails("Scan started. Expand a ticker row to load details.");
+                    styleInlineStatus(universeStatusLabel, "Universe: scan started (" + shortenRunId(runId) + ")", COLOR_SUCCESS);
+                    styleInlineStatus(scanResultsStatusLabel, "Scan results: run " + shortenRunId(runId) + " started", COLOR_WARNING);
+                    appendScanWarningLog("Scan run started: " + runId);
+                    logScanAudit("started", runId, payload, null);
+                    loadScanResults(true);
+                    startScanStatusPolling(runId);
+                    loadScanRuns(true);
+                } catch (Exception ex) {
+                    styleInlineStatus(universeStatusLabel, "Universe: scan start failed", COLOR_DANGER);
+                    styleInlineStatus(scanResultsStatusLabel, "Scan results: start failed", COLOR_DANGER);
+                    appendScanWarningLog("Scan start failed: " + humanizeError(ex));
+                    if (isConnectivityIssue(ex)) {
+                        styleStatusLabel(connectionLabel, "Connection failed", COLOR_DANGER);
+                        backendExternalConnected = false;
+                        refreshBackendControls();
+                    }
+                    logScanAudit("failed", "", payload, humanizeError(ex));
+                    JOptionPane.showMessageDialog(
+                            frame,
+                            "Failed to start scan:\n" + humanizeError(ex),
+                            "Scan Start Failed",
+                            JOptionPane.ERROR_MESSAGE
+                    );
+                }
+            }
+        };
+        worker.execute();
+    }
+
+    private boolean ensureScanBackendReachableForScan() {
+        configureClientFromUI();
+        if (healthCheckWithRetries(2, 2, 150L)) {
+            styleStatusLabel(connectionLabel, "Connected", COLOR_SUCCESS);
+            backendExternalConnected = !backendIsRunning() && !backendStarting;
+            refreshBackendControls();
+            return true;
+        }
+        styleStatusLabel(connectionLabel, "Connection failed", COLOR_DANGER);
+        backendExternalConnected = false;
+        refreshBackendControls();
+        appendScanWarningLog("Backend preflight failed at " + currentHostPort());
+
+        styleInlineStatus(
+                universeStatusLabel,
+                "Universe: backend not reachable at " + currentHostPort(),
+                COLOR_DANGER
+        );
+        JOptionPane.showMessageDialog(
+                frame,
+                "Cannot start scan because backend is not reachable at " + currentHostPort() + ".\n\n"
+                        + "Go to AI Management > Backend Control and click Start AI Backend,\n"
+                        + "then click Check Connection.",
+                "Backend Not Reachable",
+                JOptionPane.ERROR_MESSAGE
+        );
+        return false;
+    }
+
+    private boolean healthCheckWithRetries(int attempts, int timeoutSeconds, long pauseMillis) {
+        int tries = Math.max(1, attempts);
+        int timeout = Math.max(1, timeoutSeconds);
+        for (int i = 0; i < tries; i++) {
+            if (apiClient.healthCheck(timeout)) {
+                return true;
+            }
+            if (i + 1 < tries && pauseMillis > 0) {
+                try {
+                    Thread.sleep(pauseMillis);
+                } catch (InterruptedException ex) {
+                    Thread.currentThread().interrupt();
+                    break;
+                }
+            }
+        }
+        return false;
+    }
+
+    private void logScanAudit(String status, String runId, Map<String, Object> config, String error) {
+        Map<String, Object> entry = new LinkedHashMap<>();
+        entry.put("event", "scan_action");
+        entry.put("user", resolveAuditUser());
+        entry.put("initiated_at", LocalDateTime.now().toString());
+        entry.put("status", firstNonBlank(status, "unknown"));
+        entry.put("run_id", firstNonBlank(runId, "n/a"));
+        entry.put("runId", firstNonBlank(runId, "n/a"));
+        entry.put("config", config == null ? new LinkedHashMap<String, Object>() : new LinkedHashMap<>(config));
+        if (error != null && !error.isBlank()) {
+            entry.put("error", error);
+        }
+        try {
+            auditLogStore.append(entry);
+            if (auditLogStatusLabel != null) {
+                styleInlineStatus(auditLogStatusLabel, "Audit: updated at " + ts(), COLOR_SUCCESS);
+            }
+        } catch (IOException ex) {
+            if (auditLogStatusLabel != null) {
+                styleInlineStatus(auditLogStatusLabel, "Audit: write failed", COLOR_DANGER);
+            }
+        }
+    }
+
+    private void stepScanPage(int delta) {
+        if (scanPageSpinner == null) {
+            return;
+        }
+        int current = Json.asInt(scanPageSpinner.getValue(), 1);
+        int next = Math.max(1, current + delta);
+        scanPageSpinner.setValue(next);
+        loadScanResults(true);
+    }
+
+    private void loadScanResults(boolean forceRefresh) {
+        String runId = scanRunIdField == null ? "" : scanRunIdField.getText().trim();
+        if (runId.isBlank()) {
+            styleInlineStatus(scanResultsStatusLabel, "Scan results: enter runId first", COLOR_WARNING);
+            return;
+        }
+        int page = Math.max(1, Json.asInt(scanPageSpinner.getValue(), 1));
+        int pageSize = scanPageSizeCombo == null ? 100 : Math.max(1, (Integer) scanPageSizeCombo.getSelectedItem());
+        if (!Objects.equals(activeScanRunId, runId)) {
+            activeScanRunId = runId;
+            expandedScanTicker = null;
+            scanDetailCache.clear();
+            clearScanDetails("Run changed. Expand a ticker row to load details.");
+        }
+
+        styleInlineStatus(scanResultsStatusLabel, "Scan results: loading...", COLOR_WARNING);
+        SwingWorker<ScanService.ScanResultsPage, Void> worker = new SwingWorker<>() {
+            @Override
+            protected ScanService.ScanResultsPage doInBackground() throws Exception {
+                return scanService.getScanResults(runId, page, pageSize, forceRefresh);
+            }
+
+            @Override
+            protected void done() {
+                try {
+                    ScanService.ScanResultsPage pageData = get();
+                    List<ScanResultRow> rows = buildScanResultRows(pageData.rows());
+                    scanResultsTableModel.setRows(rows);
+                    scanResultsTableModel.setExpandedTicker(expandedScanTicker);
+                    scanResultsTotal = Math.max(pageData.total(), rows.size());
+                    scanPrevPageButton.setEnabled(page > 1);
+                    scanNextPageButton.setEnabled((long) page * pageSize < scanResultsTotal);
+                    String statusText = "Scan results: loaded " + rows.size() + " (page " + page + ", total ~" + scanResultsTotal
+                            + ")";
+                    styleInlineStatus(scanResultsStatusLabel, statusText, COLOR_SUCCESS);
+                    if (rows.isEmpty()) {
+                        clearScanDetails("No scan results on this page yet.");
+                    }
+                } catch (Exception ex) {
+                    styleInlineStatus(scanResultsStatusLabel, "Scan results: load failed", COLOR_DANGER);
+                    clearScanDetails("Failed to load scan results: " + humanizeError(ex));
+                }
+            }
+        };
+        worker.execute();
+    }
+
+    private List<ScanResultRow> buildScanResultRows(List<Map<String, Object>> payloadRows) {
+        List<ScanResultRow> rows = new ArrayList<>();
+        for (Map<String, Object> payload : payloadRows) {
+            String ticker = firstNonBlank(
+                    stringOrEmpty(findAnyValue(payload, "ticker", "symbol", "id")),
+                    ""
+            ).toUpperCase();
+            if (ticker.isBlank()) {
+                continue;
+            }
+            String rowStatus = firstNonBlank(stringOrEmpty(findAnyValue(payload, "status", "state")), "unknown");
+            double score = Json.asDouble(findAnyValue(payload, "overall_score", "score", "rank_score"), Double.NaN);
+            String regime = firstNonBlank(
+                    stringOrEmpty(findAnyValue(payload, "regime", "regime_label", "market_regime")),
+                    "—"
+            );
+            String trend = firstNonBlank(
+                    stringOrEmpty(findAnyValue(payload, "trend_momentum", "trend", "momentum_label")),
+                    "—"
+            );
+            String volIv = firstNonBlank(
+                    stringOrEmpty(findAnyValue(payload, "volatility_iv", "volatility_context", "iv_context", "iv_label")),
+                    "—"
+            );
+            String topStrategy = firstNonBlank(
+                    stringOrEmpty(findAnyValue(payload, "top_strategy", "recommended_strategy", "strategy")),
+                    "—"
+            );
+            if ("—".equals(topStrategy) && "failed".equalsIgnoreCase(rowStatus)) {
+                topStrategy = "FAILED";
+            }
+            double confidence = Json.asDouble(findAnyValue(payload, "confidence", "probability", "conf"), Double.NaN);
+            int warningsCount = Json.asInt(findAnyValue(payload, "warning_count", "warnings_count"), -1);
+            if (warningsCount < 0) {
+                Object warnings = firstNonNull(findAnyValue(payload, "warnings", "errors"), findAnyValue(payload, "error"));
+                if (warnings instanceof List<?> warningList) {
+                    warningsCount = warningList.size();
+                } else if (warnings == null) {
+                    warningsCount = 0;
+                } else {
+                    warningsCount = 1;
+                }
+            }
+            if (warningsCount == 0 && "failed".equalsIgnoreCase(rowStatus)) {
+                warningsCount = 1;
+            }
+            String updated = firstNonBlank(
+                    stringOrEmpty(findAnyValue(payload, "updated_at", "last_updated", "timestamp", "as_of")),
+                    "—"
+            );
+            rows.add(new ScanResultRow(
+                    ticker,
+                    score,
+                    regime,
+                    trend,
+                    volIv,
+                    topStrategy,
+                    confidence,
+                    warningsCount,
+                    updated,
+                    payload
+            ));
+        }
+        return rows;
+    }
+
+    private void refreshScanStatusOnce() {
+        String runId = scanRunIdField == null ? "" : scanRunIdField.getText().trim();
+        if (runId.isBlank()) {
+            styleInlineStatus(scanResultsStatusLabel, "Scan results: enter runId first", COLOR_WARNING);
+            return;
+        }
+        SwingWorker<Map<String, Object>, Void> worker = new SwingWorker<>() {
+            @Override
+            protected Map<String, Object> doInBackground() throws Exception {
+                return scanService.getScanStatus(runId);
+            }
+
+            @Override
+            protected void done() {
+                try {
+                    updateScanStatusWidgets(get());
+                } catch (Exception ex) {
+                    styleInlineStatus(scanResultsStatusLabel, "Scan status: fetch failed", COLOR_DANGER);
+                    scanWarningsArea.setText(ts() + " | Status fetch failed: " + humanizeError(ex));
+                }
+            }
+        };
+        worker.execute();
+    }
+
+    private void startScanStatusPolling(String runId) {
+        if (runId == null || runId.isBlank()) {
+            return;
+        }
+        if (activeScanStatusWorker != null && !activeScanStatusWorker.isDone()) {
+            activeScanStatusWorker.cancel(true);
+        }
+
+        activeScanStatusWorker = new SwingWorker<>() {
+            @Override
+            protected Void doInBackground() {
+                int consecutiveErrors = 0;
+                appendScanWarningLog("Polling scan status for run " + shortenRunId(runId) + "...");
+                while (!isCancelled()) {
+                    try {
+                        Map<String, Object> status = scanService.getScanStatus(runId);
+                        consecutiveErrors = 0;
+                        publish(status);
+                        String state = safeLower(stringOrEmpty(findAnyValue(status, "status", "state")));
+                        if (state.equals("completed") || state.equals("failed") || state.equals("cancelled")) {
+                            break;
+                        }
+                        Thread.sleep(2000);
+                    } catch (InterruptedException ex) {
+                        Thread.currentThread().interrupt();
+                        break;
+                    } catch (Exception ex) {
+                        consecutiveErrors++;
+                        if (consecutiveErrors == 1 || consecutiveErrors % 5 == 0) {
+                            Map<String, Object> error = new LinkedHashMap<>();
+                            error.put("status", "warning");
+                            error.put(
+                                    "warning",
+                                    "Scan status polling issue (" + consecutiveErrors + "): "
+                                            + humanizeError(ex)
+                                            + ". Retrying..."
+                            );
+                            publish(error);
+                        }
+
+                        if (consecutiveErrors >= 30) {
+                            Map<String, Object> error = new LinkedHashMap<>();
+                            error.put("status", "error");
+                            error.put(
+                                    "error",
+                                    "Scan status polling failed repeatedly (" + consecutiveErrors
+                                            + "). Stop/restart backend if this persists."
+                            );
+                            publish(error);
+                            break;
+                        }
+
+                        try {
+                            Thread.sleep(Math.min(5000L, 800L + (long) consecutiveErrors * 200L));
+                        } catch (InterruptedException interrupted) {
+                            Thread.currentThread().interrupt();
+                            break;
+                        }
+                    }
+                }
+                return null;
+            }
+
+            @Override
+            protected void process(List<Map<String, Object>> chunks) {
+                if (chunks == null || chunks.isEmpty()) {
+                    return;
+                }
+                updateScanStatusWidgets(chunks.get(chunks.size() - 1));
+            }
+
+            @Override
+            protected void done() {
+                if (!isCancelled()) {
+                    loadScanResults(true);
+                    loadScanRuns(true);
+                }
+            }
+        };
+        activeScanStatusWorker.execute();
+    }
+
+    private void updateScanStatusWidgets(Map<String, Object> status) {
+        if (status == null) {
+            return;
+        }
+        String state = firstNonBlank(stringOrEmpty(findAnyValue(status, "status", "state")), "unknown");
+        double progressRaw = Json.asDouble(findAnyValue(status, "progress", "progress_percent", "percent"), Double.NaN);
+        int progress = 0;
+        if (Double.isFinite(progressRaw)) {
+            if (progressRaw <= 1.0) {
+                progressRaw *= 100.0;
+            }
+            progress = (int) Math.max(0, Math.min(100, Math.round(progressRaw)));
+        }
+        String ticker = firstNonBlank(
+                stringOrEmpty(findAnyValue(status, "current_ticker", "ticker", "current_symbol")),
+                "—"
+        );
+        scanProgressBar.setValue(progress);
+        scanProgressBar.setString(progress + "%");
+        styleInlineStatus(scanProgressLabel, "Progress: " + progress + "% (" + state + ")", COLOR_MUTED);
+        styleInlineStatus(scanCurrentTickerLabel, "Ticker: " + ticker, COLOR_MUTED);
+
+        Color statusColor = COLOR_MUTED;
+        String lower = safeLower(state);
+        if (lower.contains("running") || lower.contains("queued")) {
+            statusColor = COLOR_WARNING;
+        } else if (lower.contains("completed")) {
+            statusColor = COLOR_SUCCESS;
+        } else if (lower.contains("failed") || lower.contains("error") || lower.contains("cancelled")) {
+            statusColor = COLOR_DANGER;
+        }
+        styleInlineStatus(scanResultsStatusLabel, "Scan status: " + state, statusColor);
+
+        StringBuilder warningText = new StringBuilder();
+        Object warnings = firstNonNull(findAnyValue(status, "warnings", "warning_summary"), findAnyValue(status, "errors", "error"));
+        Object errorsSummary = findAnyValue(status, "errorsSummary", "errors_summary");
+        if (warnings != null) {
+            if (warnings instanceof Map<?, ?> || warnings instanceof List<?>) {
+                warningText.append(Json.pretty(warnings));
+            } else {
+                warningText.append(String.valueOf(warnings));
+            }
+            String normalized = warningText.toString().trim();
+            if (!normalized.isBlank() && !normalized.equals(lastScanWarningSignature)) {
+                lastScanWarningSignature = normalized;
+                appendScanWarningLog("Backend warning/error update:\n" + normalized);
+            }
+        } else if (scanWarningsArea != null && scanWarningsArea.getText().isBlank()) {
+            scanWarningsArea.setText("No warnings/errors yet.");
+            scanWarningsArea.setCaretPosition(0);
+        }
+
+        if (errorsSummary instanceof Map<?, ?> errorsMapRaw) {
+            Map<String, Object> errorsMap = Json.asObject(errorsMapRaw);
+            int failedCount = Json.asInt(findAnyValue(status, "failedTickers", "failed_tickers"), 0);
+            int errorCount = Json.asInt(findAnyValue(errorsMap, "count"), 0);
+            Object tickersObj = findAnyValue(errorsMap, "tickers", "symbols");
+            String tickerSnippet = "";
+            if (tickersObj instanceof List<?> list && !list.isEmpty()) {
+                List<String> labels = new ArrayList<>();
+                for (Object item : list) {
+                    if (item == null) {
+                        continue;
+                    }
+                    labels.add(String.valueOf(item));
+                    if (labels.size() >= 8) {
+                        break;
+                    }
+                }
+                if (!labels.isEmpty()) {
+                    tickerSnippet = String.join(", ", labels);
+                }
+            }
+            if ((errorCount > 0 || failedCount > 0) && !tickerSnippet.isBlank()) {
+                appendScanWarningLog(
+                        "Failure summary: failed_tickers=" + failedCount
+                                + ", error_entries=" + errorCount
+                                + ", sample=" + tickerSnippet
+                );
+            } else if (errorCount > 0 || failedCount > 0) {
+                appendScanWarningLog(
+                        "Failure summary: failed_tickers=" + failedCount
+                                + ", error_entries=" + errorCount
+                );
+            }
+        }
+    }
+
+    private void toggleScanDetails(int modelRow) {
+        if (scanResultsTableModel == null) {
+            return;
+        }
+        ScanResultRow row = scanResultsTableModel.getRow(modelRow);
+        if (row == null) {
+            return;
+        }
+        String ticker = row.ticker();
+        if (ticker.equals(expandedScanTicker)) {
+            expandedScanTicker = null;
+            scanResultsTableModel.setExpandedTicker(null);
+            clearScanDetails("Row collapsed. Expand any row to load details.");
+            return;
+        }
+        expandedScanTicker = ticker;
+        scanResultsTableModel.setExpandedTicker(ticker);
+        loadScanDetail(false);
+    }
+
+    private void retrySelectedScanDetail() {
+        if (expandedScanTicker == null || expandedScanTicker.isBlank()) {
+            JOptionPane.showMessageDialog(
+                    frame,
+                    "Expand a ticker row first.",
+                    "Retry Detail Fetch",
+                    JOptionPane.INFORMATION_MESSAGE
+            );
+            return;
+        }
+        loadScanDetail(true);
+    }
+
+    private void loadScanDetail(boolean forceRefresh) {
+        String runId = activeScanRunId == null ? "" : activeScanRunId.trim();
+        String ticker = expandedScanTicker == null ? "" : expandedScanTicker.trim();
+        if (runId.isBlank() || ticker.isBlank()) {
+            clearScanDetails("Select a ticker row to load details.");
+            return;
+        }
+        String cacheKey = runId + "::" + ticker;
+        if (!forceRefresh && scanDetailCache.containsKey(cacheKey)) {
+            renderScanDetail(runId, ticker, scanDetailCache.get(cacheKey));
+            return;
+        }
+
+        clearScanDetails("Loading detail for " + ticker + "...");
+        SwingWorker<Map<String, Object>, Void> worker = new SwingWorker<>() {
+            @Override
+            protected Map<String, Object> doInBackground() throws Exception {
+                return scanService.getScanResult(runId, ticker, forceRefresh);
+            }
+
+            @Override
+            protected void done() {
+                try {
+                    Map<String, Object> payload = get();
+                    scanDetailCache.put(cacheKey, payload);
+                    renderScanDetail(runId, ticker, payload);
+                } catch (Exception ex) {
+                    clearScanDetails("Failed to load detail for " + ticker + ": " + humanizeError(ex));
+                }
+            }
+        };
+        worker.execute();
+    }
+
+    private void renderScanDetail(String runId, String ticker, Map<String, Object> payload) {
+        Object executive = findAnyValue(payload, "executive_summary", "summary", "overview");
+        Object market = findAnyValue(payload, "market_context", "regime");
+        Object priceVolume = findAnyValue(payload, "price_volume_signals", "price_volume_analysis", "signals");
+        Object options = findAnyValue(payload, "option_candidates", "options", "strategies");
+        Object risk = findAnyValue(payload, "risk_notes", "risk_summary", "risk");
+        Object explain = findAnyValue(payload, "why_this", "traceability", "explainability");
+
+        scanExecutiveSummaryArea.setText(formatScanSection("Executive Summary", executive));
+        scanMarketContextArea.setText(formatScanSection("Market Context", market));
+        scanPriceVolumeArea.setText(formatScanSection("Price/Volume Signals", priceVolume));
+        scanOptionsArea.setText(formatScanSection("Option Trade Candidates", options));
+        scanRiskArea.setText(formatScanSection("Risk Notes", risk));
+        scanExplainabilityArea.setText(formatScanSection("Why This", explain));
+
+        StringBuilder artifacts = new StringBuilder();
+        artifacts.append("Run ID: ").append(runId).append("\n");
+        artifacts.append("Ticker: ").append(ticker).append("\n\n");
+        artifacts.append("Raw Payload:\n");
+        artifacts.append(Json.pretty(payload));
+        scanArtifactsArea.setText(artifacts.toString());
+        scanArtifactsArea.setCaretPosition(0);
+        scanExecutiveSummaryArea.setCaretPosition(0);
+        scanMarketContextArea.setCaretPosition(0);
+        scanPriceVolumeArea.setCaretPosition(0);
+        scanOptionsArea.setCaretPosition(0);
+        scanRiskArea.setCaretPosition(0);
+        scanExplainabilityArea.setCaretPosition(0);
+
+        Object warnings = firstNonNull(findAnyValue(payload, "warnings"), findAnyValue(payload, "errors"));
+        if (warnings != null) {
+            scanWarningsArea.setText(formatScanSection("Warnings", warnings));
+            scanWarningsArea.setCaretPosition(0);
+        }
+    }
+
+    private String formatScanSection(String title, Object payload) {
+        StringBuilder sb = new StringBuilder();
+        sb.append(title).append(":\n");
+        if (payload == null) {
+            sb.append("- section data is not available in the backend payload.");
+            return sb.toString();
+        }
+        if (payload instanceof Map<?, ?> || payload instanceof List<?>) {
+            sb.append(Json.pretty(payload));
+            return sb.toString();
+        }
+        sb.append(String.valueOf(payload));
+        return sb.toString();
+    }
+
+    private void clearScanDetails(String message) {
+        String text = message == null || message.isBlank() ? "No expanded row selected." : message;
+        if (scanExecutiveSummaryArea != null) {
+            scanExecutiveSummaryArea.setText(formatScanPlaceholder("Executive Summary", text));
+            scanExecutiveSummaryArea.setCaretPosition(0);
+        }
+        if (scanMarketContextArea != null) {
+            scanMarketContextArea.setText(formatScanPlaceholder("Market Context", text));
+            scanMarketContextArea.setCaretPosition(0);
+        }
+        if (scanPriceVolumeArea != null) {
+            scanPriceVolumeArea.setText(formatScanPlaceholder("Price/Volume Signals", text));
+            scanPriceVolumeArea.setCaretPosition(0);
+        }
+        if (scanOptionsArea != null) {
+            scanOptionsArea.setText(formatScanPlaceholder("Option Trade Candidates", text));
+            scanOptionsArea.setCaretPosition(0);
+        }
+        if (scanRiskArea != null) {
+            scanRiskArea.setText(formatScanPlaceholder("Risk Notes", text));
+            scanRiskArea.setCaretPosition(0);
+        }
+        if (scanExplainabilityArea != null) {
+            scanExplainabilityArea.setText(formatScanPlaceholder("Why This", text));
+            scanExplainabilityArea.setCaretPosition(0);
+        }
+        if (scanArtifactsArea != null) {
+            scanArtifactsArea.setText(formatScanPlaceholder("Artifacts", text));
+            scanArtifactsArea.setCaretPosition(0);
+        }
+    }
+
+    private String formatScanPlaceholder(String section, String message) {
+        String status = message == null || message.isBlank() ? "No expanded row selected." : message;
+        return section + ":\n" + status;
+    }
+
+    private void appendScanWarningLog(String message) {
+        if (message == null || message.isBlank()) {
+            return;
+        }
+        Runnable update = () -> {
+            if (scanWarningsArea == null) {
+                return;
+            }
+            String existing = scanWarningsArea.getText();
+            if (existing == null) {
+                existing = "";
+            }
+            if (existing.equalsIgnoreCase("No warnings/errors.")
+                    || existing.equalsIgnoreCase("No warnings/errors yet.")) {
+                existing = "";
+            }
+
+            String line = ts() + " | " + message;
+            String next = existing.isBlank() ? line : existing + "\n" + line;
+            int maxChars = 30_000;
+            if (next.length() > maxChars) {
+                next = next.substring(next.length() - maxChars);
+            }
+            scanWarningsArea.setText(next);
+            scanWarningsArea.setCaretPosition(scanWarningsArea.getDocument().getLength());
+        };
+
+        if (SwingUtilities.isEventDispatchThread()) {
+            update.run();
+        } else {
+            SwingUtilities.invokeLater(update);
+        }
+    }
+
+    private void loadScanRuns(boolean forceRefresh) {
+        configureClientFromUI();
+        if (!apiClient.healthCheck(2)) {
+            styleInlineStatus(
+                    scanRunsStatusLabel,
+                    "Scan runs: backend offline at " + currentHostPort(),
+                    COLOR_DANGER
+            );
+            if (scanRunsTableModel != null && scanRunsTableModel.getRowCount() == 0) {
+                scanRunsTableModel.setRows(new ArrayList<>());
+            }
+            return;
+        }
+
+        styleInlineStatus(scanRunsStatusLabel, "Scan runs: loading...", COLOR_WARNING);
+        SwingWorker<List<ScanRunRow>, Void> worker = new SwingWorker<>() {
+            @Override
+            protected List<ScanRunRow> doInBackground() throws Exception {
+                List<Map<String, Object>> runs = scanService.listScanRuns(forceRefresh);
+                List<ScanRunRow> rows = new ArrayList<>();
+                for (Map<String, Object> run : runs) {
+                    String runId = firstNonBlank(stringOrEmpty(findAnyValue(run, "run_id", "runId", "id")), "");
+                    if (runId.isBlank()) {
+                        continue;
+                    }
+                    String startedAt = firstNonBlank(
+                            stringOrEmpty(findAnyValue(run, "created_at", "started_at", "start_time", "timestamp")),
+                            "—"
+                    );
+                    String universeHash = firstNonBlank(
+                            stringOrEmpty(findAnyValue(run, "universe_hash", "hash", "universeHash")),
+                            "—"
+                    );
+                    String configSummary = firstNonBlank(
+                            stringOrEmpty(findAnyValue(run, "config_summary", "horizon", "horizons")),
+                            "—"
+                    );
+                    String status = firstNonBlank(stringOrEmpty(findAnyValue(run, "status", "state")), "unknown");
+                    String topMetric = asMetricString(findAnyValue(run, "primary_score", "score", "sharpe", "f1"));
+                    rows.add(new ScanRunRow(runId, startedAt, universeHash, configSummary, topMetric, status, run));
+                }
+                rows.sort((a, b) -> b.startedAt().compareTo(a.startedAt()));
+                return rows;
+            }
+
+            @Override
+            protected void done() {
+                try {
+                    List<ScanRunRow> rows = get();
+                    scanRunsTableModel.setRows(rows);
+                    styleInlineStatus(scanRunsStatusLabel, "Scan runs: loaded " + rows.size(), COLOR_SUCCESS);
+                } catch (Exception ex) {
+                    if (isConnectivityIssue(ex)) {
+                        styleInlineStatus(
+                                scanRunsStatusLabel,
+                                "Scan runs: backend offline at " + currentHostPort(),
+                                COLOR_DANGER
+                        );
+                        if (scanRunsTableModel != null && scanRunsTableModel.getRowCount() == 0) {
+                            scanRunsTableModel.setRows(new ArrayList<>());
+                        }
+                        return;
+                    }
+
+                    styleInlineStatus(scanRunsStatusLabel, "Scan runs: load failed", COLOR_DANGER);
+                    JOptionPane.showMessageDialog(
+                            frame,
+                            "Failed to load scan runs:\n" + humanizeError(ex),
+                            "Scan Runs",
+                            JOptionPane.ERROR_MESSAGE
+                    );
+                }
+            }
+        };
+        worker.execute();
+    }
+
+    private boolean isConnectivityIssue(Throwable error) {
+        if (error == null) {
+            return false;
+        }
+        Throwable cause = error;
+        if (error instanceof Exception ex && ex.getCause() != null) {
+            cause = ex.getCause();
+        }
+        String className = cause.getClass().getSimpleName();
+        String message = cause.getMessage() == null ? "" : cause.getMessage();
+        String full = (className + " " + message).toLowerCase();
+        return full.contains("connectexception")
+                || full.contains("connection refused")
+                || full.contains("failed to connect")
+                || full.contains("couldn't connect")
+                || full.contains("timed out")
+                || full.contains("no route to host")
+                || full.contains("host is down");
+    }
+
+    private void openSelectedScanRun() {
+        if (scanRunsTable == null || scanRunsTableModel == null) {
+            return;
+        }
+        int viewRow = scanRunsTable.getSelectedRow();
+        if (viewRow < 0) {
+            JOptionPane.showMessageDialog(
+                    frame,
+                    "Select a run first.",
+                    "Open Scan Run",
+                    JOptionPane.INFORMATION_MESSAGE
+            );
+            return;
+        }
+        int modelRow = scanRunsTable.convertRowIndexToModel(viewRow);
+        ScanRunRow row = scanRunsTableModel.getRow(modelRow);
+        if (row == null) {
+            return;
+        }
+        activeScanRunId = row.runId();
+        scanRunIdField.setText(row.runId());
+        if (universeMainTabs != null) {
+            universeMainTabs.setSelectedIndex(1);
+        }
+        loadScanResults(true);
+        startScanStatusPolling(row.runId());
+    }
+
+    private List<String> selectedTickersFromModel(UniverseTableModel model) {
+        LinkedHashSet<String> tickers = new LinkedHashSet<>();
+        if (model == null) {
+            return new ArrayList<>();
+        }
+        for (UniverseRow row : model.selectedRows()) {
+            if (row != null && row.ticker() != null) {
+                String ticker = row.ticker().trim().toUpperCase();
+                if (!ticker.isBlank()) {
+                    tickers.add(ticker);
+                }
+            }
+        }
+        return new ArrayList<>(tickers);
+    }
+
+    private List<String> allTickersFromModel(UniverseTableModel model) {
+        LinkedHashSet<String> tickers = new LinkedHashSet<>();
+        if (model == null) {
+            return new ArrayList<>();
+        }
+        for (UniverseRow row : model.rows()) {
+            if (row != null && row.ticker() != null) {
+                String ticker = row.ticker().trim().toUpperCase();
+                if (!ticker.isBlank()) {
+                    tickers.add(ticker);
+                }
+            }
+        }
+        return new ArrayList<>(tickers);
+    }
+
+    private List<String> parseCsvTokens(String text) {
+        List<String> tokens = new ArrayList<>();
+        if (text == null || text.isBlank()) {
+            return tokens;
+        }
+        for (String part : text.split(",")) {
+            String token = part.trim();
+            if (!token.isBlank()) {
+                tokens.add(token);
+            }
+        }
+        return tokens;
+    }
+
+    private String activeUniverseId() {
+        if (universeTabs == null) {
+            return "nasdaq_top_500";
+        }
+        return switch (universeTabs.getSelectedIndex()) {
+            case 1 -> "wsb_top_500";
+            case 2 -> "combined_1000";
+            default -> "nasdaq_top_500";
+        };
+    }
+
+    private UniverseTableModel activeUniverseModel() {
+        if (universeTabs == null) {
+            return universeNasdaqTableModel;
+        }
+        return switch (universeTabs.getSelectedIndex()) {
+            case 1 -> universeWsbTableModel;
+            case 2 -> universeCombinedTableModel;
+            default -> universeNasdaqTableModel;
+        };
+    }
+
+    private JTable activeUniverseTable() {
+        if (universeTabs == null) {
+            return universeNasdaqTable;
+        }
+        return switch (universeTabs.getSelectedIndex()) {
+            case 1 -> universeWsbTable;
+            case 2 -> universeCombinedTable;
+            default -> universeNasdaqTable;
+        };
+    }
+
+    private TableRowSorter<UniverseTableModel> activeUniverseSorter() {
+        if (universeTabs == null) {
+            return universeNasdaqSorter;
+        }
+        return switch (universeTabs.getSelectedIndex()) {
+            case 1 -> universeWsbSorter;
+            case 2 -> universeCombinedSorter;
+            default -> universeNasdaqSorter;
+        };
+    }
+
+    private Map<String, Object> activeUniversePayload() {
+        if (universeTabs == null) {
+            return universeNasdaqPayload;
+        }
+        return switch (universeTabs.getSelectedIndex()) {
+            case 1 -> universeWsbPayload;
+            case 2 -> universeCombinedPayload;
+            default -> universeNasdaqPayload;
+        };
+    }
+
+    private Double asNullableDouble(Object value) {
+        if (value == null) {
+            return null;
+        }
+        double parsed = Json.asDouble(value, Double.NaN);
+        if (!Double.isFinite(parsed)) {
+            return null;
+        }
+        return parsed;
+    }
+
+    private double parseSortableDouble(Object value) {
+        if (value == null) {
+            return Double.NaN;
+        }
+        if (value instanceof Number number) {
+            return number.doubleValue();
+        }
+        String text = String.valueOf(value).replace(",", "").trim();
+        if (text.isEmpty() || "—".equals(text)) {
+            return Double.NaN;
+        }
+        try {
+            return Double.parseDouble(text);
+        } catch (RuntimeException ignored) {
+            return Double.NaN;
+        }
+    }
+
+    private int parseSortableInt(Object value) {
+        if (value instanceof Number number) {
+            return number.intValue();
+        }
+        String text = String.valueOf(value).trim();
+        if (text.isEmpty() || "—".equals(text)) {
+            return Integer.MIN_VALUE;
+        }
+        try {
+            return Integer.parseInt(text);
+        } catch (RuntimeException ignored) {
+            return Integer.MIN_VALUE;
+        }
     }
 
     private JPanel createDashboardPanel() {
@@ -1923,6 +3949,7 @@ public final class DPolarisJavaApp {
             if (runReadinessBannerLabel != null) {
                 styleInlineStatus(runReadinessBannerLabel, "Guardrails: select one run", COLOR_MUTED);
             }
+            setTrainingGuardrailIdle();
             updateReadinessActionButtons();
             return;
         }
@@ -2069,6 +4096,7 @@ public final class DPolarisJavaApp {
         if (runReadinessBannerLabel != null) {
             styleInlineStatus(runReadinessBannerLabel, "Guardrails: loading...", COLOR_WARNING);
         }
+        setTrainingGuardrailLoading(runId);
 
         SwingWorker<Map<String, Object>, Void> worker = new SwingWorker<>() {
             @Override
@@ -2845,6 +4873,7 @@ public final class DPolarisJavaApp {
             styleInlineStatus(runReadinessBannerLabel, "Guardrails: warnings present", COLOR_WARNING);
             styleInlineStatus(runReadinessActionStatusLabel, "Actions: available with warnings", COLOR_WARNING);
         }
+        updateTrainingGuardrailBanners(report, currentGuardrailRunId);
         updateReadinessActionButtons();
     }
 
@@ -5385,6 +7414,7 @@ public final class DPolarisJavaApp {
         if (runReadinessBannerLabel != null) {
             styleInlineStatus(runReadinessBannerLabel, "Guardrails: idle", COLOR_MUTED);
         }
+        setTrainingGuardrailIdle();
         updateReadinessActionButtons();
     }
 
@@ -5626,9 +7656,16 @@ public final class DPolarisJavaApp {
         }
         contentLayout.show(contentPanel, viewId);
         styleNavButtonState(navAiManagementButton, VIEW_AI_MANAGEMENT.equals(viewId));
+        styleNavButtonState(navUniverseButton, VIEW_UNIVERSE_SCAN.equals(viewId));
         styleNavButtonState(navDashboardButton, VIEW_DASHBOARD.equals(viewId));
         styleNavButtonState(navTrainingRunsButton, VIEW_TRAINING_RUNS.equals(viewId));
         styleNavButtonState(navPredictionInspectorButton, VIEW_PREDICTION_INSPECTOR.equals(viewId));
+        if (VIEW_UNIVERSE_SCAN.equals(viewId)) {
+            ensureUniverseLoaded(false);
+            if (scanRunsTableModel != null && scanRunsTableModel.getRowCount() == 0) {
+                loadScanRuns(false);
+            }
+        }
         if (VIEW_TRAINING_RUNS.equals(viewId) && runsTableModel != null && runsTableModel.getRowCount() == 0) {
             loadRuns(false);
         }
@@ -5740,6 +7777,12 @@ public final class DPolarisJavaApp {
         deepModelCombo.addActionListener(e -> updateDeepModelTooltip());
         deepModelCombo.setToolTipText(buildDeepModelTooltip("lstm"));
 
+        trainingGuardrailSummaryLabel = new JLabel();
+        trainingGuardrailLeakageLabel = new JLabel();
+        trainingGuardrailCostsLabel = new JLabel();
+        trainingGuardrailWalkForwardLabel = new JLabel();
+        trainingGuardrailQualityLabel = new JLabel();
+
         JPanel rowOne = new JPanel(new FlowLayout(FlowLayout.LEFT, 8, 0));
         rowOne.setOpaque(false);
         rowOne.add(createFormLabel("Symbol"));
@@ -5786,12 +7829,50 @@ public final class DPolarisJavaApp {
         controlsCard.add(createSectionHeader("Training Controls"), BorderLayout.NORTH);
         controlsCard.add(controlsBody, BorderLayout.CENTER);
 
+        JPanel guardrailRowOne = new JPanel(new FlowLayout(FlowLayout.LEFT, 8, 0));
+        guardrailRowOne.setOpaque(false);
+        guardrailRowOne.add(trainingGuardrailSummaryLabel);
+        guardrailRowOne.add(trainingGuardrailLeakageLabel);
+
+        JPanel guardrailRowTwo = new JPanel(new FlowLayout(FlowLayout.LEFT, 8, 0));
+        guardrailRowTwo.setOpaque(false);
+        guardrailRowTwo.add(trainingGuardrailCostsLabel);
+        guardrailRowTwo.add(trainingGuardrailWalkForwardLabel);
+        guardrailRowTwo.add(trainingGuardrailQualityLabel);
+
+        JPanel guardrailBody = new JPanel(new GridBagLayout());
+        guardrailBody.setOpaque(false);
+        GridBagConstraints guardrailGbc = new GridBagConstraints();
+        guardrailGbc.gridx = 0;
+        guardrailGbc.gridy = 0;
+        guardrailGbc.weightx = 1.0;
+        guardrailGbc.fill = GridBagConstraints.HORIZONTAL;
+        guardrailGbc.insets = new Insets(0, 0, 6, 0);
+        guardrailBody.add(guardrailRowOne, guardrailGbc);
+        guardrailGbc.gridy++;
+        guardrailGbc.insets = new Insets(0, 0, 0, 0);
+        guardrailBody.add(guardrailRowTwo, guardrailGbc);
+
+        JPanel guardrailCard = createCardPanel();
+        guardrailCard.add(createSectionHeader("Guardrails (Loaded Run)"), BorderLayout.NORTH);
+        guardrailCard.add(guardrailBody, BorderLayout.CENTER);
+
         trainingLogArea = createLogArea();
         JScrollPane logScroll = createLogScrollPane(trainingLogArea, "Training Timeline (select + copy supported)");
 
-        root.add(controlsCard, BorderLayout.NORTH);
+        JPanel topStack = new JPanel();
+        topStack.setOpaque(false);
+        topStack.setLayout(new BoxLayout(topStack, BoxLayout.Y_AXIS));
+        controlsCard.setAlignmentX(Component.LEFT_ALIGNMENT);
+        guardrailCard.setAlignmentX(Component.LEFT_ALIGNMENT);
+        topStack.add(controlsCard);
+        topStack.add(Box.createVerticalStrut(8));
+        topStack.add(guardrailCard);
+
+        root.add(topStack, BorderLayout.NORTH);
         root.add(logScroll, BorderLayout.CENTER);
         updateDeepModelTooltip();
+        setTrainingGuardrailIdle();
         return root;
     }
 
@@ -6010,7 +8091,7 @@ public final class DPolarisJavaApp {
         ));
     }
 
-    private void styleCombo(JComboBox<String> combo) {
+    private void styleCombo(JComboBox<?> combo) {
         combo.setFont(uiFont);
         combo.setOpaque(true);
         combo.setForeground(COLOR_TEXT);
@@ -6350,16 +8431,6 @@ public final class DPolarisJavaApp {
         backendPathField.setText(backendPath);
 
         configureClientFromUI();
-        if (apiClient.healthCheck(2)) {
-            backendExternalConnected = true;
-            appendBackendLog(ts() + " | Backend is already reachable on "
-                    + hostField.getText().trim() + ":" + portField.getText().trim()
-                    + ". Reusing existing backend.");
-            checkConnection();
-            refreshBackendControls();
-            return;
-        }
-
         backendPortConflictLogged = false;
         backendExternalConnected = false;
         backendStarting = true;
@@ -6367,8 +8438,38 @@ public final class DPolarisJavaApp {
         appendBackendLog(ts() + " | Starting AI backend from: " + backendPath);
 
         SwingWorker<Void, Void> worker = new SwingWorker<>() {
+            private boolean reusedExternal;
+            private boolean replacedExternal;
+            private boolean healthyAfterStart;
+
             @Override
             protected Void doInBackground() throws Exception {
+                if (apiClient.healthCheck(2)) {
+                    if (apiClient.supportsScanApi()) {
+                        reusedExternal = true;
+                        return null;
+                    }
+
+                    int port = currentPort();
+                    appendBackendLog(ts() + " | Existing backend on port " + port
+                            + " does not expose scan endpoints; replacing it.");
+                    List<Long> pids = findListeningPids(port);
+                    if (pids.isEmpty()) {
+                        throw new IOException("No listening process found on port " + port + ".");
+                    }
+                    for (Long pid : pids) {
+                        stopPid(pid);
+                    }
+                    replacedExternal = true;
+
+                    for (int i = 0; i < 20; i++) {
+                        if (!apiClient.healthCheck(1)) {
+                            break;
+                        }
+                        Thread.sleep(250);
+                    }
+                }
+
                 List<String> command = buildBackendCommand(backendPath);
                 appendBackendLog(ts() + " | Command: " + String.join(" ", command));
 
@@ -6382,6 +8483,7 @@ public final class DPolarisJavaApp {
 
                 startBackendLogPump(process);
                 startBackendExitWatcher(process);
+                healthyAfterStart = waitForBackendReady(40, 500L);
                 return null;
             }
 
@@ -6389,10 +8491,23 @@ public final class DPolarisJavaApp {
             protected void done() {
                 try {
                     get();
-                    backendExternalConnected = false;
+                    if (reusedExternal) {
+                        backendExternalConnected = true;
+                        appendBackendLog(ts() + " | Backend already reachable on "
+                                + hostField.getText().trim() + ":" + portField.getText().trim()
+                                + ". Reusing compatible backend.");
+                    } else {
+                        backendExternalConnected = false;
+                        if (replacedExternal) {
+                            appendBackendLog(ts() + " | Replaced incompatible backend instance.");
+                        }
+                        appendBackendLog(ts() + " | Backend process started.");
+                        if (!healthyAfterStart) {
+                            appendBackendLog(ts() + " | Backend started but health check is still pending.");
+                        }
+                    }
                     backendStarting = false;
                     refreshBackendControls();
-                    appendBackendLog(ts() + " | Backend process started.");
                     checkConnection();
                 } catch (Exception ex) {
                     backendExternalConnected = false;
@@ -6587,6 +8702,22 @@ public final class DPolarisJavaApp {
         } catch (NumberFormatException ignored) {
             return 8420;
         }
+    }
+
+    private boolean waitForBackendReady(int attempts, long sleepMillis) throws InterruptedException {
+        int safeAttempts = Math.max(1, attempts);
+        long safeSleepMs = Math.max(100L, sleepMillis);
+        for (int i = 0; i < safeAttempts; i++) {
+            if (apiClient.healthCheck(1)) {
+                return true;
+            }
+            Process process = backendProcess;
+            if (process != null && !process.isAlive() && i >= 2) {
+                return false;
+            }
+            Thread.sleep(safeSleepMs);
+        }
+        return apiClient.healthCheck(1);
     }
 
     private List<Long> findListeningPids(int port) throws IOException, InterruptedException {
@@ -7679,6 +9810,85 @@ public final class DPolarisJavaApp {
         });
     }
 
+    private void setTrainingGuardrailLoading(String runId) {
+        SwingUtilities.invokeLater(() -> {
+            if (trainingGuardrailSummaryLabel == null) {
+                return;
+            }
+            String suffix = (runId == null || runId.isBlank()) ? "" : " (" + shortenRunId(runId) + ")";
+            styleInlineStatus(trainingGuardrailSummaryLabel, "Guardrails: loading" + suffix, COLOR_WARNING);
+            styleInlineStatus(trainingGuardrailLeakageLabel, "Leakage: ...", COLOR_WARNING);
+            styleInlineStatus(trainingGuardrailCostsLabel, "Costs/slippage: ...", COLOR_WARNING);
+            styleInlineStatus(trainingGuardrailWalkForwardLabel, "Walk-forward: ...", COLOR_WARNING);
+            styleInlineStatus(trainingGuardrailQualityLabel, "Quality gates: ...", COLOR_WARNING);
+        });
+    }
+
+    private void setTrainingGuardrailIdle() {
+        SwingUtilities.invokeLater(() -> {
+            if (trainingGuardrailSummaryLabel == null) {
+                return;
+            }
+            styleInlineStatus(
+                    trainingGuardrailSummaryLabel,
+                    "Guardrails: load a run in Training Runs",
+                    COLOR_MUTED
+            );
+            styleInlineStatus(trainingGuardrailLeakageLabel, "Leakage: not evaluated", COLOR_MUTED);
+            styleInlineStatus(trainingGuardrailCostsLabel, "Costs/slippage: not evaluated", COLOR_MUTED);
+            styleInlineStatus(trainingGuardrailWalkForwardLabel, "Walk-forward: not evaluated", COLOR_MUTED);
+            styleInlineStatus(trainingGuardrailQualityLabel, "Quality gates: not evaluated", COLOR_MUTED);
+        });
+    }
+
+    private void updateTrainingGuardrailBanners(GuardrailEngine.GuardrailReport report, String runId) {
+        SwingUtilities.invokeLater(() -> {
+            if (trainingGuardrailSummaryLabel == null) {
+                return;
+            }
+            if (report == null) {
+                setTrainingGuardrailIdle();
+                return;
+            }
+
+            String suffix = (runId == null || runId.isBlank()) ? "" : " (" + shortenRunId(runId) + ")";
+            boolean hasCosts = report.checklist().getOrDefault("backtest_costs", false);
+            boolean walkForward = report.checklist().getOrDefault("walk_forward", false);
+            boolean qualityGates = report.checklist().getOrDefault("quality_gates", false);
+            boolean leakageChecks = report.checklist().getOrDefault("leakage_checks", false);
+            boolean leakageFailed = report.leakageFailed();
+
+            if (report.checklistGreen()) {
+                styleInlineStatus(trainingGuardrailSummaryLabel, "Guardrails: GREEN" + suffix, COLOR_SUCCESS);
+            } else if (report.hasBlocker() || leakageFailed) {
+                styleInlineStatus(trainingGuardrailSummaryLabel, "Guardrails: BLOCKED" + suffix, COLOR_DANGER);
+            } else {
+                styleInlineStatus(trainingGuardrailSummaryLabel, "Guardrails: ACTION REQUIRED" + suffix, COLOR_WARNING);
+            }
+
+            styleInlineStatus(
+                    trainingGuardrailLeakageLabel,
+                    leakageFailed ? "Leakage: FAILED (blocked)" : (leakageChecks ? "Leakage: PASS" : "Leakage: UNKNOWN"),
+                    leakageFailed ? COLOR_DANGER : (leakageChecks ? COLOR_SUCCESS : COLOR_WARNING)
+            );
+            styleInlineStatus(
+                    trainingGuardrailCostsLabel,
+                    hasCosts ? "Costs/slippage: PASS" : "Costs/slippage: FAIL",
+                    hasCosts ? COLOR_SUCCESS : COLOR_DANGER
+            );
+            styleInlineStatus(
+                    trainingGuardrailWalkForwardLabel,
+                    walkForward ? "Walk-forward: PASS" : "Walk-forward: FAIL",
+                    walkForward ? COLOR_SUCCESS : COLOR_DANGER
+            );
+            styleInlineStatus(
+                    trainingGuardrailQualityLabel,
+                    qualityGates ? "Quality gates: PASS" : "Quality gates: FAIL",
+                    qualityGates ? COLOR_SUCCESS : COLOR_DANGER
+            );
+        });
+    }
+
     private void setDataStatus(String text, Color color) {
         SwingUtilities.invokeLater(() -> {
             if (dataStatusValue != null) {
@@ -8402,6 +10612,334 @@ public final class DPolarisJavaApp {
                 prevX = x;
                 prevY = y;
             }
+        }
+    }
+
+    private static final class UniverseTableModel extends AbstractTableModel {
+        private static final String[] COLUMNS = {
+                "Select",
+                "Ticker",
+                "Name",
+                "Sector",
+                "Market Cap",
+                "Avg $ Volume",
+                "Mentions"
+        };
+        private List<UniverseRow> rows = new ArrayList<>();
+
+        @Override
+        public int getRowCount() {
+            return rows.size();
+        }
+
+        @Override
+        public int getColumnCount() {
+            return COLUMNS.length;
+        }
+
+        @Override
+        public String getColumnName(int column) {
+            return COLUMNS[column];
+        }
+
+        @Override
+        public Class<?> getColumnClass(int columnIndex) {
+            return columnIndex == 0 ? Boolean.class : String.class;
+        }
+
+        @Override
+        public boolean isCellEditable(int rowIndex, int columnIndex) {
+            return columnIndex == 0;
+        }
+
+        @Override
+        public void setValueAt(Object aValue, int rowIndex, int columnIndex) {
+            if (columnIndex != 0 || rowIndex < 0 || rowIndex >= rows.size()) {
+                return;
+            }
+            UniverseRow row = rows.get(rowIndex);
+            row.setSelected(Boolean.TRUE.equals(aValue));
+            fireTableCellUpdated(rowIndex, columnIndex);
+        }
+
+        @Override
+        public Object getValueAt(int rowIndex, int columnIndex) {
+            UniverseRow row = rows.get(rowIndex);
+            return switch (columnIndex) {
+                case 0 -> row.selected();
+                case 1 -> row.ticker();
+                case 2 -> row.name();
+                case 3 -> row.sector();
+                case 4 -> formatMoney(row.marketCap());
+                case 5 -> formatMoney(row.avgDollarVolume());
+                case 6 -> row.mentionCount() == null ? "—" : String.valueOf(row.mentionCount());
+                default -> "";
+            };
+        }
+
+        void setRows(List<UniverseRow> rows) {
+            this.rows = rows == null ? new ArrayList<>() : new ArrayList<>(rows);
+            fireTableDataChanged();
+        }
+
+        UniverseRow getRow(int rowIndex) {
+            if (rowIndex < 0 || rowIndex >= rows.size()) {
+                return null;
+            }
+            return rows.get(rowIndex);
+        }
+
+        void setSelected(int rowIndex, boolean selected) {
+            if (rowIndex < 0 || rowIndex >= rows.size()) {
+                return;
+            }
+            rows.get(rowIndex).setSelected(selected);
+            fireTableCellUpdated(rowIndex, 0);
+        }
+
+        List<UniverseRow> selectedRows() {
+            List<UniverseRow> out = new ArrayList<>();
+            for (UniverseRow row : rows) {
+                if (row.selected()) {
+                    out.add(row);
+                }
+            }
+            return out;
+        }
+
+        List<UniverseRow> rows() {
+            return new ArrayList<>(rows);
+        }
+
+        private String formatMoney(Double value) {
+            if (value == null || !Double.isFinite(value)) {
+                return "—";
+            }
+            if (Math.abs(value) >= 1_000_000_000.0) {
+                return String.format("$%.2fB", value / 1_000_000_000.0);
+            }
+            if (Math.abs(value) >= 1_000_000.0) {
+                return String.format("$%.2fM", value / 1_000_000.0);
+            }
+            return String.format("$%,.0f", value);
+        }
+    }
+
+    private static final class UniverseRow {
+        private boolean selected;
+        private final String ticker;
+        private final String name;
+        private final String sector;
+        private final Double marketCap;
+        private final Double avgDollarVolume;
+        private final Long mentionCount;
+        private final Map<String, Object> raw;
+
+        private UniverseRow(
+                boolean selected,
+                String ticker,
+                String name,
+                String sector,
+                Double marketCap,
+                Double avgDollarVolume,
+                Long mentionCount,
+                Map<String, Object> raw
+        ) {
+            this.selected = selected;
+            this.ticker = ticker == null ? "" : ticker;
+            this.name = name == null ? "—" : name;
+            this.sector = sector == null ? "—" : sector;
+            this.marketCap = marketCap;
+            this.avgDollarVolume = avgDollarVolume;
+            this.mentionCount = mentionCount;
+            this.raw = raw == null ? new LinkedHashMap<>() : raw;
+        }
+
+        boolean selected() {
+            return selected;
+        }
+
+        void setSelected(boolean selected) {
+            this.selected = selected;
+        }
+
+        String ticker() {
+            return ticker;
+        }
+
+        String name() {
+            return name;
+        }
+
+        String sector() {
+            return sector;
+        }
+
+        Double marketCap() {
+            return marketCap;
+        }
+
+        Double avgDollarVolume() {
+            return avgDollarVolume;
+        }
+
+        Long mentionCount() {
+            return mentionCount;
+        }
+
+        Map<String, Object> raw() {
+            return raw;
+        }
+    }
+
+    private static final class ScanResultsTableModel extends AbstractTableModel {
+        private static final String[] COLUMNS = {
+                "Expand",
+                "Ticker",
+                "Overall Score",
+                "Regime",
+                "Trend/Momentum",
+                "Vol/IV",
+                "Top Strategy",
+                "Confidence",
+                "Warnings",
+                "Updated"
+        };
+        private List<ScanResultRow> rows = new ArrayList<>();
+        private String expandedTicker;
+
+        @Override
+        public int getRowCount() {
+            return rows.size();
+        }
+
+        @Override
+        public int getColumnCount() {
+            return COLUMNS.length;
+        }
+
+        @Override
+        public String getColumnName(int column) {
+            return COLUMNS[column];
+        }
+
+        @Override
+        public Object getValueAt(int rowIndex, int columnIndex) {
+            ScanResultRow row = rows.get(rowIndex);
+            return switch (columnIndex) {
+                case 0 -> row.ticker().equals(expandedTicker) ? "▼" : "▶";
+                case 1 -> row.ticker();
+                case 2 -> Double.isNaN(row.overallScore()) ? "—" : String.format("%.4f", row.overallScore());
+                case 3 -> row.regime();
+                case 4 -> row.trendMomentum();
+                case 5 -> row.volatilityIv();
+                case 6 -> row.topStrategy();
+                case 7 -> Double.isNaN(row.confidence()) ? "—" : String.format("%.3f", row.confidence());
+                case 8 -> row.warningsCount();
+                case 9 -> row.updatedAt();
+                default -> "";
+            };
+        }
+
+        void setRows(List<ScanResultRow> rows) {
+            this.rows = rows == null ? new ArrayList<>() : new ArrayList<>(rows);
+            fireTableDataChanged();
+        }
+
+        ScanResultRow getRow(int rowIndex) {
+            if (rowIndex < 0 || rowIndex >= rows.size()) {
+                return null;
+            }
+            return rows.get(rowIndex);
+        }
+
+        void setExpandedTicker(String expandedTicker) {
+            this.expandedTicker = expandedTicker;
+            fireTableRowsUpdated(0, Math.max(0, rows.size() - 1));
+        }
+    }
+
+    private record ScanResultRow(
+            String ticker,
+            double overallScore,
+            String regime,
+            String trendMomentum,
+            String volatilityIv,
+            String topStrategy,
+            double confidence,
+            int warningsCount,
+            String updatedAt,
+            Map<String, Object> raw
+    ) {
+    }
+
+    private static final class ScanRunsTableModel extends AbstractTableModel {
+        private static final String[] COLUMNS = {
+                "Run ID",
+                "Date/Time",
+                "Universe Hash",
+                "Config",
+                "Primary Score",
+                "Status"
+        };
+        private List<ScanRunRow> rows = new ArrayList<>();
+
+        @Override
+        public int getRowCount() {
+            return rows.size();
+        }
+
+        @Override
+        public int getColumnCount() {
+            return COLUMNS.length;
+        }
+
+        @Override
+        public String getColumnName(int column) {
+            return COLUMNS[column];
+        }
+
+        @Override
+        public Object getValueAt(int rowIndex, int columnIndex) {
+            ScanRunRow row = rows.get(rowIndex);
+            return switch (columnIndex) {
+                case 0 -> row.shortRunId();
+                case 1 -> row.startedAt();
+                case 2 -> row.universeHash();
+                case 3 -> row.configSummary();
+                case 4 -> row.primaryScore();
+                case 5 -> row.status();
+                default -> "";
+            };
+        }
+
+        void setRows(List<ScanRunRow> rows) {
+            this.rows = rows == null ? new ArrayList<>() : new ArrayList<>(rows);
+            fireTableDataChanged();
+        }
+
+        ScanRunRow getRow(int rowIndex) {
+            if (rowIndex < 0 || rowIndex >= rows.size()) {
+                return null;
+            }
+            return rows.get(rowIndex);
+        }
+    }
+
+    private record ScanRunRow(
+            String runId,
+            String startedAt,
+            String universeHash,
+            String configSummary,
+            String primaryScore,
+            String status,
+            Map<String, Object> raw
+    ) {
+        String shortRunId() {
+            if (runId == null || runId.isBlank()) {
+                return "—";
+            }
+            return runId.length() <= 8 ? runId : runId.substring(0, 8);
         }
     }
 
