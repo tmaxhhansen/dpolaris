@@ -359,6 +359,7 @@ public final class DPolarisJavaApp {
     private ScanRunsTableModel scanRunsTableModel;
 
     private volatile SwingWorker<Void, String> activeTrainingWorker;
+    private volatile boolean backendActionInFlight;
     private final BackendController backendController = new BackendController(
             this::onBackendControllerLog,
             state -> SwingUtilities.invokeLater(this::refreshBackendControls)
@@ -8394,27 +8395,28 @@ public final class DPolarisJavaApp {
 
     private void refreshBackendControls() {
         BackendController.State state = backendController.getState();
+        boolean actionInFlight = backendActionInFlight;
         boolean starting = state == BackendController.State.STARTING;
         boolean running = state == BackendController.State.RUNNING;
         boolean errored = state == BackendController.State.ERROR;
 
         if (startBackendButton != null) {
-            startBackendButton.setEnabled(!starting && !running);
+            startBackendButton.setEnabled(!actionInFlight && !starting && !running);
         }
         if (stopBackendButton != null) {
-            stopBackendButton.setEnabled(starting || running || errored);
+            stopBackendButton.setEnabled(!actionInFlight && (starting || running || errored));
         }
         if (restartBackendButton != null) {
-            restartBackendButton.setEnabled(!starting);
+            restartBackendButton.setEnabled(!actionInFlight && !starting);
         }
         if (saveBackendLogsButton != null) {
             saveBackendLogsButton.setEnabled(!backendLogBuffer.isEmpty());
         }
         if (startDaemonButton != null) {
-            startDaemonButton.setEnabled(!starting);
+            startDaemonButton.setEnabled(!actionInFlight && !starting);
         }
         if (stopDaemonButton != null) {
-            stopDaemonButton.setEnabled(!starting);
+            stopDaemonButton.setEnabled(!actionInFlight && !starting);
         }
 
         if (backendStatusValue == null) {
@@ -8436,6 +8438,12 @@ public final class DPolarisJavaApp {
     }
 
     private void startBackendProcess() {
+        if (backendActionInFlight) {
+            appendBackendLog(ts() + " | [SYSTEM] Start ignored: backend action already in progress.");
+            return;
+        }
+        backendActionInFlight = true;
+        refreshBackendControls();
         appendBackendLog(ts() + " | [SYSTEM] Start backend requested.");
         SwingWorker<Void, Void> worker = new SwingWorker<>() {
             @Override
@@ -8467,6 +8475,8 @@ public final class DPolarisJavaApp {
                                 JOptionPane.ERROR_MESSAGE
                         );
                     }
+                } finally {
+                    backendActionInFlight = false;
                 }
                 refreshBackendControls();
             }
@@ -8475,6 +8485,12 @@ public final class DPolarisJavaApp {
     }
 
     private void stopBackendProcess() {
+        if (backendActionInFlight) {
+            appendBackendLog(ts() + " | [SYSTEM] Stop ignored: backend action already in progress.");
+            return;
+        }
+        backendActionInFlight = true;
+        refreshBackendControls();
         appendBackendLog(ts() + " | [SYSTEM] Stop backend requested.");
         SwingWorker<Void, Void> worker = new SwingWorker<>() {
             @Override
@@ -8485,7 +8501,14 @@ public final class DPolarisJavaApp {
 
             @Override
             protected void done() {
-                appendBackendLog(ts() + " | [SYSTEM] Backend stopped.");
+                try {
+                    get();
+                    appendBackendLog(ts() + " | [SYSTEM] Backend stopped.");
+                } catch (Exception ex) {
+                    appendBackendLog(ts() + " | [SYSTEM] Backend stop failed: " + humanizeError(ex));
+                } finally {
+                    backendActionInFlight = false;
+                }
                 refreshBackendControls();
                 checkConnection();
             }
@@ -8494,6 +8517,12 @@ public final class DPolarisJavaApp {
     }
 
     private void restartBackendProcess() {
+        if (backendActionInFlight) {
+            appendBackendLog(ts() + " | [SYSTEM] Restart ignored: backend action already in progress.");
+            return;
+        }
+        backendActionInFlight = true;
+        refreshBackendControls();
         appendBackendLog(ts() + " | [SYSTEM] Restart backend requested.");
         SwingWorker<Void, Void> worker = new SwingWorker<>() {
             @Override
@@ -8516,6 +8545,8 @@ public final class DPolarisJavaApp {
                 } catch (Exception ex) {
                     appendBackendLog(ts() + " | [SYSTEM] Backend restart failed: " + humanizeError(ex));
                     styleStatusLabel(connectionLabel, "Connection failed", COLOR_DANGER);
+                } finally {
+                    backendActionInFlight = false;
                 }
                 refreshBackendControls();
             }
