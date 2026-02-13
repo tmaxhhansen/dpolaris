@@ -30,9 +30,12 @@ import java.nio.file.Files;
 import java.nio.file.Path;
 import java.time.LocalDate;
 import java.time.LocalDateTime;
+import java.time.Duration;
 import java.time.format.DateTimeFormatter;
+import java.util.ArrayDeque;
 import java.util.ArrayList;
 import java.util.Comparator;
+import java.util.Deque;
 import java.util.LinkedHashMap;
 import java.util.LinkedHashSet;
 import java.util.List;
@@ -108,6 +111,8 @@ public final class DPolarisJavaApp {
     private static final String VIEW_DASHBOARD = "DASHBOARD";
     private static final String VIEW_TRAINING_RUNS = "TRAINING_RUNS";
     private static final String VIEW_PREDICTION_INSPECTOR = "PREDICTION_INSPECTOR";
+    private static final int BACKEND_LOG_MAX_LINES = 2000;
+    private static final Path BACKEND_LOG_PATH = Path.of("C:\\my-git\\dpolaris\\logs\\backend.log");
     private static final Pattern RUN_ID_PATTERN = Pattern.compile(
             "\"?(?:run_id|runId|run-id)\"?\\s*[:=]\\s*\"?([A-Za-z0-9_.:-]+)\"?"
     );
@@ -130,6 +135,8 @@ public final class DPolarisJavaApp {
     private JTextField backendPathField;
     private JButton startBackendButton;
     private JButton stopBackendButton;
+    private JButton restartBackendButton;
+    private JButton saveBackendLogsButton;
     private JButton startDaemonButton;
     private JButton stopDaemonButton;
     private JLabel backendStatusValue;
@@ -352,10 +359,11 @@ public final class DPolarisJavaApp {
     private ScanRunsTableModel scanRunsTableModel;
 
     private volatile SwingWorker<Void, String> activeTrainingWorker;
-    private volatile Process backendProcess;
-    private volatile boolean backendStarting = false;
-    private volatile boolean backendExternalConnected = false;
-    private volatile boolean backendPortConflictLogged = false;
+    private final BackendController backendController = new BackendController(
+            this::onBackendControllerLog,
+            state -> SwingUtilities.invokeLater(this::refreshBackendControls)
+    );
+    private final Deque<String> backendLogBuffer = new ArrayDeque<>(BACKEND_LOG_MAX_LINES + 16);
     private volatile int deliveredLogCount = 0;
     private volatile String loadedRunDetailsId;
     private volatile GuardrailEngine.GuardrailReport currentGuardrailReport;
@@ -459,6 +467,8 @@ public final class DPolarisJavaApp {
         checkConnectionButton.addActionListener(e -> checkConnection());
         startBackendButton.addActionListener(e -> startBackendProcess());
         stopBackendButton.addActionListener(e -> stopBackendProcess());
+        restartBackendButton.addActionListener(e -> restartBackendProcess());
+        saveBackendLogsButton.addActionListener(e -> saveBackendLogs());
         startDaemonButton.addActionListener(e -> startDaemon());
         stopDaemonButton.addActionListener(e -> stopDaemon());
         modeCombo.addActionListener(e -> refreshTrainingControls());
@@ -1630,7 +1640,6 @@ public final class DPolarisJavaApp {
                     appendScanWarningLog("Scan start failed: " + humanizeError(ex));
                     if (isConnectivityIssue(ex)) {
                         styleStatusLabel(connectionLabel, "Connection failed", COLOR_DANGER);
-                        backendExternalConnected = false;
                         refreshBackendControls();
                     }
                     logScanAudit("failed", "", payload, humanizeError(ex));
@@ -1650,12 +1659,10 @@ public final class DPolarisJavaApp {
         configureClientFromUI();
         if (healthCheckWithRetries(2, 2, 150L)) {
             styleStatusLabel(connectionLabel, "Connected", COLOR_SUCCESS);
-            backendExternalConnected = !backendIsRunning() && !backendStarting;
             refreshBackendControls();
             return true;
         }
         styleStatusLabel(connectionLabel, "Connection failed", COLOR_DANGER);
-        backendExternalConnected = false;
         refreshBackendControls();
         appendScanWarningLog("Backend preflight failed at " + currentHostPort());
 
@@ -7676,9 +7683,11 @@ public final class DPolarisJavaApp {
         root.setBackground(COLOR_BG);
         root.setBorder(new EmptyBorder(8, 0, 0, 0));
 
-        backendPathField = new JTextField(defaultBackendPath(), 44);
-        startBackendButton = new JButton("Start AI Backend");
-        stopBackendButton = new JButton("Stop AI Backend");
+        backendPathField = new JTextField("C:\\my-git\\dpolaris_ai", 44);
+        startBackendButton = new JButton("Start Backend");
+        stopBackendButton = new JButton("Stop Backend");
+        restartBackendButton = new JButton("Restart Backend");
+        saveBackendLogsButton = new JButton("Save Logs");
         startDaemonButton = new JButton("Start Daemon");
         stopDaemonButton = new JButton("Stop Daemon");
         JButton clearLogsButton = new JButton("Clear Logs");
@@ -7686,25 +7695,38 @@ public final class DPolarisJavaApp {
         daemonStatusValue = new JLabel();
 
         styleInputField(backendPathField);
+        backendPathField.setEditable(false);
         styleButton(startBackendButton, true);
         styleButton(stopBackendButton, false);
+        styleButton(restartBackendButton, false);
+        styleButton(saveBackendLogsButton, false);
         styleButton(startDaemonButton, false);
         styleButton(stopDaemonButton, false);
         styleButton(clearLogsButton, false);
-        styleInlineStatus(backendStatusValue, "Backend: stopped", COLOR_MUTED);
+        styleInlineStatus(backendStatusValue, "STOPPED", COLOR_MUTED);
         styleInlineStatus(daemonStatusValue, "Scheduler: unknown", COLOR_MUTED);
 
-        clearLogsButton.addActionListener(e -> backendLogArea.setText(""));
+        clearLogsButton.addActionListener(e -> {
+            synchronized (backendLogBuffer) {
+                backendLogBuffer.clear();
+            }
+            backendLogArea.setText("");
+            if (saveBackendLogsButton != null) {
+                saveBackendLogsButton.setEnabled(false);
+            }
+        });
 
         JLabel pathLabel = createFormLabel("AI Backend Path");
         JLabel noteLabel = createHintLabel(
-                "Use Start AI Backend if no server is running. If one is already on port 8420, the app will reuse it."
+                "Fixed launch command: C:\\my-git\\dpolaris_ai\\.venv\\Scripts\\python.exe -m cli.main server --host 127.0.0.1 --port 8420"
         );
 
         JPanel runtimeActions = new JPanel(new FlowLayout(FlowLayout.LEFT, 8, 0));
         runtimeActions.setOpaque(false);
         runtimeActions.add(startBackendButton);
         runtimeActions.add(stopBackendButton);
+        runtimeActions.add(restartBackendButton);
+        runtimeActions.add(saveBackendLogsButton);
         runtimeActions.add(backendStatusValue);
 
         JPanel daemonActions = new JPanel(new FlowLayout(FlowLayout.LEFT, 8, 0));
@@ -8323,10 +8345,8 @@ public final class DPolarisJavaApp {
                 }
                 if (connected) {
                     styleStatusLabel(connectionLabel, "Connected", COLOR_SUCCESS);
-                    backendExternalConnected = !backendIsRunning() && !backendStarting;
                 } else {
                     styleStatusLabel(connectionLabel, "Connection failed", COLOR_DANGER);
-                    backendExternalConnected = false;
                 }
                 refreshBackendControls();
             }
@@ -8369,121 +8389,63 @@ public final class DPolarisJavaApp {
     }
 
     private boolean backendIsRunning() {
-        Process process = backendProcess;
-        return process != null && process.isAlive();
+        return backendController.isProcessAlive();
     }
 
     private void refreshBackendControls() {
-        boolean managedRunning = backendIsRunning();
-        boolean externalConnected = backendExternalConnected && !managedRunning && !backendStarting;
+        BackendController.State state = backendController.getState();
+        boolean starting = state == BackendController.State.STARTING;
+        boolean running = state == BackendController.State.RUNNING;
+        boolean errored = state == BackendController.State.ERROR;
 
-        startBackendButton.setEnabled(!managedRunning && !backendStarting && !externalConnected);
-        stopBackendButton.setEnabled(managedRunning || externalConnected);
-        startDaemonButton.setEnabled(!backendStarting);
-        stopDaemonButton.setEnabled(!backendStarting);
-
-        if (externalConnected) {
-            startBackendButton.setToolTipText("Backend is already connected externally.");
-            stopBackendButton.setToolTipText("Stop connected backend on current host/port.");
-        } else if (managedRunning) {
-            startBackendButton.setToolTipText("Backend is already running.");
-            stopBackendButton.setToolTipText("Stop the backend process started by this app.");
-        } else if (backendStarting) {
-            startBackendButton.setToolTipText("Backend operation in progress.");
-            stopBackendButton.setToolTipText("Wait for backend operation to complete.");
-        } else {
-            startBackendButton.setToolTipText("Start backend from AI path.");
-            stopBackendButton.setToolTipText("No managed backend process is running.");
+        if (startBackendButton != null) {
+            startBackendButton.setEnabled(!starting && !running);
+        }
+        if (stopBackendButton != null) {
+            stopBackendButton.setEnabled(starting || running || errored);
+        }
+        if (restartBackendButton != null) {
+            restartBackendButton.setEnabled(!starting);
+        }
+        if (saveBackendLogsButton != null) {
+            saveBackendLogsButton.setEnabled(!backendLogBuffer.isEmpty());
+        }
+        if (startDaemonButton != null) {
+            startDaemonButton.setEnabled(!starting);
+        }
+        if (stopDaemonButton != null) {
+            stopDaemonButton.setEnabled(!starting);
         }
 
-        if (backendStatusValue != null) {
-            if (backendStarting) {
-                styleInlineStatus(backendStatusValue, "Backend: starting...", COLOR_WARNING);
-            } else if (managedRunning) {
-                styleInlineStatus(backendStatusValue, "Backend: running", COLOR_SUCCESS);
-            } else if (externalConnected) {
-                styleInlineStatus(backendStatusValue, "Backend: connected (external)", COLOR_SUCCESS);
-            } else {
-                styleInlineStatus(backendStatusValue, "Backend: stopped", COLOR_MUTED);
-            }
+        if (backendStatusValue == null) {
+            return;
         }
+        if (running) {
+            styleInlineStatus(backendStatusValue, "RUNNING", COLOR_SUCCESS);
+            return;
+        }
+        if (starting) {
+            styleInlineStatus(backendStatusValue, "STARTING", COLOR_WARNING);
+            return;
+        }
+        if (errored) {
+            styleInlineStatus(backendStatusValue, "ERROR", COLOR_DANGER);
+            return;
+        }
+        styleInlineStatus(backendStatusValue, "STOPPED", COLOR_MUTED);
     }
 
     private void startBackendProcess() {
-        if (backendStarting || backendIsRunning()) {
-            appendBackendLog(ts() + " | Backend is already running or starting.");
-            return;
-        }
-
-        String rawPath = backendPathField.getText().trim();
-        if (rawPath.isEmpty()) {
-            JOptionPane.showMessageDialog(frame, "Please enter the backend project path.", "Validation",
-                    JOptionPane.WARNING_MESSAGE);
-            return;
-        }
-        String backendPath = expandUserHome(rawPath);
-        File backendDir = new File(backendPath);
-        if (!backendDir.isDirectory()) {
-            JOptionPane.showMessageDialog(frame, "Backend path does not exist:\n" + backendPath, "Invalid Path",
-                    JOptionPane.ERROR_MESSAGE);
-            return;
-        }
-        backendPathField.setText(backendPath);
-
-        configureClientFromUI();
-        backendPortConflictLogged = false;
-        backendExternalConnected = false;
-        backendStarting = true;
-        refreshBackendControls();
-        appendBackendLog(ts() + " | Starting AI backend from: " + backendPath);
-
+        appendBackendLog(ts() + " | [SYSTEM] Start backend requested.");
         SwingWorker<Void, Void> worker = new SwingWorker<>() {
-            private boolean reusedExternal;
-            private boolean replacedExternal;
-            private boolean healthyAfterStart;
-
             @Override
             protected Void doInBackground() throws Exception {
-                if (apiClient.healthCheck(2)) {
-                    if (apiClient.supportsScanApi()) {
-                        reusedExternal = true;
-                        return null;
-                    }
-
-                    int port = currentPort();
-                    appendBackendLog(ts() + " | Existing backend on port " + port
-                            + " does not expose scan endpoints; replacing it.");
-                    List<Long> pids = findListeningPids(port);
-                    if (pids.isEmpty()) {
-                        throw new IOException("No listening process found on port " + port + ".");
-                    }
-                    for (Long pid : pids) {
-                        stopPid(pid);
-                    }
-                    replacedExternal = true;
-
-                    for (int i = 0; i < 20; i++) {
-                        if (!apiClient.healthCheck(1)) {
-                            break;
-                        }
-                        Thread.sleep(250);
-                    }
+                backendController.start();
+                boolean healthy = backendController.waitUntilHealthy(Duration.ofSeconds(20), Duration.ofMillis(500));
+                if (!healthy) {
+                    backendController.stop();
+                    throw new IOException("Backend failed to become healthy within 20 seconds.");
                 }
-
-                List<String> command = buildBackendCommand(backendPath);
-                appendBackendLog(ts() + " | Command: " + String.join(" ", command));
-
-                ProcessBuilder builder = new ProcessBuilder(command);
-                builder.directory(backendDir);
-                builder.redirectErrorStream(true);
-                builder.environment().put("PYTHONUNBUFFERED", "1");
-
-                Process process = builder.start();
-                backendProcess = process;
-
-                startBackendLogPump(process);
-                startBackendExitWatcher(process);
-                healthyAfterStart = waitForBackendReady(40, 500L);
                 return null;
             }
 
@@ -8491,209 +8453,92 @@ public final class DPolarisJavaApp {
             protected void done() {
                 try {
                     get();
-                    if (reusedExternal) {
-                        backendExternalConnected = true;
-                        appendBackendLog(ts() + " | Backend already reachable on "
-                                + hostField.getText().trim() + ":" + portField.getText().trim()
-                                + ". Reusing compatible backend.");
-                    } else {
-                        backendExternalConnected = false;
-                        if (replacedExternal) {
-                            appendBackendLog(ts() + " | Replaced incompatible backend instance.");
-                        }
-                        appendBackendLog(ts() + " | Backend process started.");
-                        if (!healthyAfterStart) {
-                            appendBackendLog(ts() + " | Backend started but health check is still pending.");
-                        }
-                    }
-                    backendStarting = false;
-                    refreshBackendControls();
-                    checkConnection();
+                    appendBackendLog(ts() + " | [SYSTEM] Backend is healthy.");
+                    styleStatusLabel(connectionLabel, "Connected", COLOR_SUCCESS);
                 } catch (Exception ex) {
-                    backendExternalConnected = false;
-                    backendStarting = false;
-                    backendProcess = null;
-                    refreshBackendControls();
-                    appendBackendLog(ts() + " | Failed to start backend: " + ex.getMessage());
-                    checkConnection();
+                    String message = humanizeError(ex);
+                    appendBackendLog(ts() + " | [SYSTEM] Backend start failed: " + message);
+                    styleStatusLabel(connectionLabel, "Connection failed", COLOR_DANGER);
+                    if (message.contains("Missing python executable:")) {
+                        JOptionPane.showMessageDialog(
+                                frame,
+                                message,
+                                "Backend Start Error",
+                                JOptionPane.ERROR_MESSAGE
+                        );
+                    }
                 }
+                refreshBackendControls();
             }
         };
         worker.execute();
-    }
-
-    private List<String> buildBackendCommand(String backendPath) {
-        String venvPython = isWindows()
-                ? backendPath + File.separator + ".venv" + File.separator + "Scripts" + File.separator + "python.exe"
-                : backendPath + File.separator + ".venv" + File.separator + "bin" + File.separator + "python";
-
-        String pythonExecutable;
-        if (new File(venvPython).isFile()) {
-            pythonExecutable = venvPython;
-        } else if (isWindows()) {
-            pythonExecutable = "python";
-        } else {
-            List<String> preferred = List.of(
-                    "/opt/homebrew/bin/python3.12",
-                    "/usr/local/bin/python3.12",
-                    "/Library/Frameworks/Python.framework/Versions/3.12/bin/python3.12",
-                    "/opt/homebrew/bin/python3.11",
-                    "/usr/local/bin/python3.11",
-                    "/Library/Frameworks/Python.framework/Versions/3.11/bin/python3.11"
-            );
-            pythonExecutable = "python3";
-            for (String candidate : preferred) {
-                if (new File(candidate).isFile()) {
-                    pythonExecutable = candidate;
-                    break;
-                }
-            }
-        }
-        return List.of(pythonExecutable, "-m", "cli.main", "server");
-    }
-
-    private void startBackendLogPump(Process process) {
-        Thread pump = new Thread(() -> {
-            try (BufferedReader reader = new BufferedReader(
-                    new InputStreamReader(process.getInputStream(), StandardCharsets.UTF_8))) {
-                String line;
-                while ((line = reader.readLine()) != null) {
-                    appendBackendLog(line);
-                    String lowered = line.toLowerCase();
-                    if (!backendPortConflictLogged && lowered.contains("address already in use")) {
-                        backendPortConflictLogged = true;
-                        appendBackendLog(ts() + " | Port " + portField.getText().trim()
-                                + " is already in use. Use the existing backend or stop the process on that port.");
-                    }
-                }
-            } catch (IOException ex) {
-                if (process.isAlive()) {
-                    appendBackendLog(ts() + " | Backend log stream error: " + ex.getMessage());
-                }
-            }
-        }, "dpolaris-backend-log-pump");
-        pump.setDaemon(true);
-        pump.start();
-    }
-
-    private void startBackendExitWatcher(Process process) {
-        Thread watcher = new Thread(() -> {
-            int exitCode = -1;
-            try {
-                exitCode = process.waitFor();
-            } catch (InterruptedException interrupted) {
-                Thread.currentThread().interrupt();
-            } finally {
-                if (backendProcess == process) {
-                    backendProcess = null;
-                }
-                int code = exitCode;
-                SwingUtilities.invokeLater(() -> {
-                    backendStarting = false;
-                    refreshBackendControls();
-                    appendBackendLog(ts() + " | Backend exited with code " + code);
-                    checkConnection();
-                });
-            }
-        }, "dpolaris-backend-exit-watcher");
-        watcher.setDaemon(true);
-        watcher.start();
     }
 
     private void stopBackendProcess() {
-        Process process = backendProcess;
-        if (backendStarting && (process == null || !process.isAlive())) {
-            appendBackendLog(ts() + " | Backend operation already in progress.");
-            return;
-        }
-        boolean externalConnected = backendExternalConnected && (process == null || !process.isAlive()) && !backendStarting;
-        if (externalConnected) {
-            stopExternalBackendByPort();
-            return;
-        }
-        if ((process == null || !process.isAlive()) && !backendStarting) {
-            refreshBackendControls();
-            return;
-        }
-
-        backendStarting = false;
-        backendExternalConnected = false;
-        refreshBackendControls();
-        appendBackendLog(ts() + " | Stopping backend process...");
-
+        appendBackendLog(ts() + " | [SYSTEM] Stop backend requested.");
         SwingWorker<Void, Void> worker = new SwingWorker<>() {
             @Override
             protected Void doInBackground() {
-                if (process != null && process.isAlive()) {
-                    process.destroy();
-                    try {
-                        if (!process.waitFor(5, TimeUnit.SECONDS)) {
-                            appendBackendLog(ts() + " | Graceful stop timed out; forcing termination.");
-                            process.destroyForcibly();
-                            process.waitFor(5, TimeUnit.SECONDS);
-                        }
-                    } catch (InterruptedException interrupted) {
-                        Thread.currentThread().interrupt();
-                    }
-                }
+                backendController.stop();
                 return null;
             }
 
             @Override
             protected void done() {
-                backendProcess = null;
-                backendExternalConnected = false;
+                appendBackendLog(ts() + " | [SYSTEM] Backend stopped.");
                 refreshBackendControls();
-                appendBackendLog(ts() + " | Backend stopped.");
                 checkConnection();
             }
         };
         worker.execute();
     }
 
-    private void stopExternalBackendByPort() {
-        configureClientFromUI();
-        int port = currentPort();
-        appendBackendLog(ts() + " | Stopping external backend on port " + port + "...");
-        backendStarting = true;
-        refreshBackendControls();
-
+    private void restartBackendProcess() {
+        appendBackendLog(ts() + " | [SYSTEM] Restart backend requested.");
         SwingWorker<Void, Void> worker = new SwingWorker<>() {
             @Override
             protected Void doInBackground() throws Exception {
-                List<Long> pids = findListeningPids(port);
-                if (pids.isEmpty()) {
-                    throw new IOException("No listening process found on port " + port + ".");
-                }
-                for (Long pid : pids) {
-                    stopPid(pid);
-                }
-                for (int i = 0; i < 10; i++) {
-                    if (!apiClient.healthCheck(1)) {
-                        return null;
-                    }
-                    Thread.sleep(300);
+                backendController.restart();
+                boolean healthy = backendController.waitUntilHealthy(Duration.ofSeconds(20), Duration.ofMillis(500));
+                if (!healthy) {
+                    backendController.stop();
+                    throw new IOException("Backend failed to become healthy within 20 seconds.");
                 }
                 return null;
             }
 
             @Override
             protected void done() {
-                backendStarting = false;
-                backendExternalConnected = false;
                 try {
                     get();
-                    appendBackendLog(ts() + " | External backend stop requested.");
+                    appendBackendLog(ts() + " | [SYSTEM] Backend restart completed.");
+                    styleStatusLabel(connectionLabel, "Connected", COLOR_SUCCESS);
                 } catch (Exception ex) {
-                    String message = ex.getCause() == null ? ex.getMessage() : ex.getCause().getMessage();
-                    appendBackendLog(ts() + " | Failed to stop external backend: " + message);
-                    appendBackendLog(ts() + " | Manual fallback: kill process listening on port " + port + ".");
+                    appendBackendLog(ts() + " | [SYSTEM] Backend restart failed: " + humanizeError(ex));
+                    styleStatusLabel(connectionLabel, "Connection failed", COLOR_DANGER);
                 }
                 refreshBackendControls();
-                checkConnection();
             }
         };
         worker.execute();
+    }
+
+    private void saveBackendLogs() {
+        try {
+            Files.createDirectories(BACKEND_LOG_PATH.getParent());
+            synchronized (backendLogBuffer) {
+                Files.write(BACKEND_LOG_PATH, backendLogBuffer, StandardCharsets.UTF_8);
+            }
+            appendBackendLog(ts() + " | [SYSTEM] Saved backend logs to " + BACKEND_LOG_PATH);
+        } catch (IOException ex) {
+            appendBackendLog(ts() + " | [SYSTEM] Failed to save backend logs: " + ex.getMessage());
+            JOptionPane.showMessageDialog(
+                    frame,
+                    "Failed to save backend logs:\n" + ex.getMessage(),
+                    "Save Logs Failed",
+                    JOptionPane.ERROR_MESSAGE
+            );
+        }
     }
 
     private int currentPort() {
@@ -8702,92 +8547,6 @@ public final class DPolarisJavaApp {
         } catch (NumberFormatException ignored) {
             return 8420;
         }
-    }
-
-    private boolean waitForBackendReady(int attempts, long sleepMillis) throws InterruptedException {
-        int safeAttempts = Math.max(1, attempts);
-        long safeSleepMs = Math.max(100L, sleepMillis);
-        for (int i = 0; i < safeAttempts; i++) {
-            if (apiClient.healthCheck(1)) {
-                return true;
-            }
-            Process process = backendProcess;
-            if (process != null && !process.isAlive() && i >= 2) {
-                return false;
-            }
-            Thread.sleep(safeSleepMs);
-        }
-        return apiClient.healthCheck(1);
-    }
-
-    private List<Long> findListeningPids(int port) throws IOException, InterruptedException {
-        LinkedHashSet<Long> pids = new LinkedHashSet<>();
-        if (isWindows()) {
-            List<String> lines = runCommandAndCollect("cmd", "/c", "netstat -ano -p tcp");
-            for (String line : lines) {
-                String lower = line.toLowerCase();
-                if (!lower.contains("listen")) {
-                    continue;
-                }
-                if (!line.contains(":" + port)) {
-                    continue;
-                }
-                String[] parts = line.trim().split("\\s+");
-                if (parts.length > 0) {
-                    try {
-                        pids.add(Long.parseLong(parts[parts.length - 1]));
-                    } catch (NumberFormatException ignored) {
-                        // Ignore malformed rows.
-                    }
-                }
-            }
-        } else {
-            List<String> lines = runCommandAndCollect("lsof", "-nP", "-ti", "TCP:" + port, "-sTCP:LISTEN");
-            for (String line : lines) {
-                String trimmed = line.trim();
-                if (trimmed.isEmpty()) {
-                    continue;
-                }
-                try {
-                    pids.add(Long.parseLong(trimmed));
-                } catch (NumberFormatException ignored) {
-                    // Ignore malformed rows.
-                }
-            }
-        }
-        return new ArrayList<>(pids);
-    }
-
-    private List<String> runCommandAndCollect(String... command) throws IOException, InterruptedException {
-        Process process = new ProcessBuilder(command).redirectErrorStream(true).start();
-        List<String> lines = new ArrayList<>();
-        try (BufferedReader reader = new BufferedReader(
-                new InputStreamReader(process.getInputStream(), StandardCharsets.UTF_8))) {
-            String line;
-            while ((line = reader.readLine()) != null) {
-                lines.add(line);
-            }
-        }
-        process.waitFor(5, TimeUnit.SECONDS);
-        return lines;
-    }
-
-    private void stopPid(long pid) throws IOException, InterruptedException {
-        if (isWindows()) {
-            runCommandAndCollect("taskkill", "/PID", String.valueOf(pid), "/F");
-            return;
-        }
-        runCommandAndCollect("kill", "-TERM", String.valueOf(pid));
-        Thread.sleep(250);
-        ProcessHandle.of(pid).ifPresent(handle -> {
-            if (handle.isAlive()) {
-                try {
-                    runCommandAndCollect("kill", "-KILL", String.valueOf(pid));
-                } catch (Exception ignored) {
-                    // Best effort kill.
-                }
-            }
-        });
     }
 
     private void startDaemon() {
@@ -8892,10 +8651,17 @@ public final class DPolarisJavaApp {
         activeTrainingWorker = new SwingWorker<>() {
             @Override
             protected Void doInBackground() {
-                if (MODE_STABLE.equals(mode)) {
-                    runStableTraining(symbol);
-                } else {
-                    runDeepTraining(symbol, deepModel, epochs);
+                try {
+                    ensureBackendHealthyForTraining();
+                    if (MODE_STABLE.equals(mode)) {
+                        runStableTraining(symbol);
+                    } else {
+                        runDeepTraining(symbol, deepModel, epochs);
+                    }
+                } catch (Exception ex) {
+                    appendTrainingLog(ts() + " | Training aborted: " + ex.getMessage());
+                    finalizeTrainingAudit("failed", null, null, null, ex.getMessage());
+                    setTrainingStatus("Training: failed", COLOR_DANGER);
                 }
                 return null;
             }
@@ -8911,6 +8677,29 @@ public final class DPolarisJavaApp {
             }
         };
         activeTrainingWorker.execute();
+    }
+
+    private void ensureBackendHealthyForTraining() {
+        if (backendController.isHealthy()) {
+            return;
+        }
+        appendTrainingLog(ts() + " | Backend not healthy. Attempting auto-start...");
+        try {
+            backendController.start();
+            boolean healthy = backendController.waitUntilHealthy(Duration.ofSeconds(20), Duration.ofMillis(500));
+            if (!healthy) {
+                backendController.stop();
+                throw new IOException("Backend did not become healthy within 20 seconds.");
+            }
+            appendTrainingLog(ts() + " | Backend auto-started successfully.");
+            SwingUtilities.invokeLater(() -> {
+                styleStatusLabel(connectionLabel, "Connected", COLOR_SUCCESS);
+                refreshBackendControls();
+            });
+        } catch (Exception ex) {
+            appendTrainingLog(ts() + " | Backend auto-start failed: " + ex.getMessage());
+            throw new RuntimeException("Backend auto-start failed: " + ex.getMessage(), ex);
+        }
     }
 
     private void runStableTraining(String symbol) {
@@ -11279,9 +11068,22 @@ public final class DPolarisJavaApp {
 
     private void appendBackendLog(String line) {
         SwingUtilities.invokeLater(() -> {
-            backendLogArea.append(line + "\n");
+            synchronized (backendLogBuffer) {
+                backendLogBuffer.addLast(line);
+                while (backendLogBuffer.size() > BACKEND_LOG_MAX_LINES) {
+                    backendLogBuffer.removeFirst();
+                }
+                backendLogArea.setText(String.join("\n", backendLogBuffer) + "\n");
+            }
             backendLogArea.setCaretPosition(backendLogArea.getDocument().getLength());
+            if (saveBackendLogsButton != null) {
+                saveBackendLogsButton.setEnabled(!backendLogBuffer.isEmpty());
+            }
         });
+    }
+
+    private void onBackendControllerLog(String stream, String message) {
+        appendBackendLog(ts() + " | [" + stream + "] " + message);
     }
 
     private static String ts() {
