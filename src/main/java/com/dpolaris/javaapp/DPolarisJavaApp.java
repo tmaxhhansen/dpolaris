@@ -425,6 +425,9 @@ public final class DPolarisJavaApp {
 
     private volatile SwingWorker<Void, String> activeTrainingWorker;
     private volatile boolean backendActionInFlight;
+    private volatile boolean backendAttachedExternal;
+    private volatile Integer backendAttachedExternalPid;
+    private volatile String backendAttachedExternalCommandLine = "";
     private final BackendController backendController = new BackendController(
             this::onBackendControllerLog,
             state -> SwingUtilities.invokeLater(this::refreshBackendControls)
@@ -9462,6 +9465,48 @@ public final class DPolarisJavaApp {
         }
     }
 
+    private record BackendStartResult(
+            boolean reusedExisting,
+            boolean blockedByPort,
+            Integer portOwnerPid,
+            String portOwnerCommand
+    ) {
+        static BackendStartResult started() {
+            return new BackendStartResult(false, false, null, "");
+        }
+
+        static BackendStartResult reused(PortOwnershipInfo ownership) {
+            Integer pid = ownership == null ? null : ownership.pid();
+            String command = ownership == null || ownership.commandLine() == null ? "" : ownership.commandLine();
+            return new BackendStartResult(true, false, pid, command);
+        }
+
+        static BackendStartResult portConflict(PortOwnershipInfo ownership) {
+            Integer pid = ownership == null ? null : ownership.pid();
+            String command = ownership == null || ownership.commandLine() == null ? "" : ownership.commandLine();
+            return new BackendStartResult(false, true, pid, command);
+        }
+    }
+
+    private record BackendStopResult(
+            boolean managedStopped,
+            boolean externalRunning,
+            Integer portOwnerPid
+    ) {
+        static BackendStopResult managedStoppedResult() {
+            return new BackendStopResult(true, false, null);
+        }
+
+        static BackendStopResult externalRunningResult(PortOwnershipInfo ownership) {
+            Integer pid = ownership == null ? null : ownership.pid();
+            return new BackendStopResult(false, true, pid);
+        }
+
+        static BackendStopResult noopResult() {
+            return new BackendStopResult(false, false, null);
+        }
+    }
+
     private JTextArea createLogArea() {
         JTextArea area = new JTextArea();
         area.setEditable(false);
@@ -9857,9 +9902,15 @@ public final class DPolarisJavaApp {
                 }
                 if (connected) {
                     styleStatusLabel(connectionLabel, "Connected", COLOR_SUCCESS);
+                    if (!backendController.isProcessAlive()) {
+                        attachExternalBackend(null);
+                    } else {
+                        clearExternalBackendAttachment();
+                    }
                     refreshOrchestratorStatus();
                 } else {
                     styleStatusLabel(connectionLabel, "Connection failed", COLOR_DANGER);
+                    clearExternalBackendAttachment();
                 }
                 refreshBackendControls();
             }
@@ -9902,14 +9953,50 @@ public final class DPolarisJavaApp {
     }
 
     private boolean backendIsRunning() {
-        return backendController.isProcessAlive();
+        return backendController.isProcessAlive() || backendAttachedExternal;
+    }
+
+    private String currentHost() {
+        String host = hostField == null ? "" : hostField.getText().trim();
+        return host.isEmpty() ? "127.0.0.1" : host;
+    }
+
+    private boolean quickHealthCheck(String host, int port, int timeoutMs) {
+        int safeTimeout = Math.max(300, timeoutMs);
+        HttpClient client = HttpClient.newBuilder()
+                .connectTimeout(Duration.ofMillis(safeTimeout))
+                .build();
+        try {
+            URI uri = URI.create("http://" + host + ":" + port + "/health");
+            HttpRequest request = HttpRequest.newBuilder(uri)
+                    .timeout(Duration.ofMillis(safeTimeout))
+                    .GET()
+                    .build();
+            HttpResponse<String> response = client.send(request, HttpResponse.BodyHandlers.ofString());
+            return response.statusCode() >= 200 && response.statusCode() < 300;
+        } catch (Exception ex) {
+            return false;
+        }
+    }
+
+    private void attachExternalBackend(PortOwnershipInfo ownership) {
+        backendAttachedExternal = true;
+        backendAttachedExternalPid = ownership == null ? null : ownership.pid();
+        backendAttachedExternalCommandLine = ownership == null ? "" : firstNonBlank(ownership.commandLine(), "");
+    }
+
+    private void clearExternalBackendAttachment() {
+        backendAttachedExternal = false;
+        backendAttachedExternalPid = null;
+        backendAttachedExternalCommandLine = "";
     }
 
     private void refreshBackendControls() {
         BackendController.State state = backendController.getState();
         boolean actionInFlight = backendActionInFlight;
         boolean starting = state == BackendController.State.STARTING;
-        boolean running = state == BackendController.State.RUNNING;
+        boolean managedRunning = state == BackendController.State.RUNNING;
+        boolean running = managedRunning || backendAttachedExternal;
         boolean errored = state == BackendController.State.ERROR;
 
         applyBackendButtonState(startBackendButton, !actionInFlight && !starting && !running, ButtonTone.PRIMARY);
@@ -9944,27 +10031,58 @@ public final class DPolarisJavaApp {
             appendBackendLog(ts() + " | [SYSTEM] Start ignored: backend action already in progress.");
             return;
         }
+        configureClientFromUI();
+        String host = currentHost();
+        int port = currentPort();
         backendActionInFlight = true;
         refreshBackendControls();
         appendBackendLog(ts() + " | [SYSTEM] Start backend requested.");
-        SwingWorker<Void, Void> worker = new SwingWorker<>() {
+        SwingWorker<BackendStartResult, Void> worker = new SwingWorker<>() {
             @Override
-            protected Void doInBackground() throws Exception {
+            protected BackendStartResult doInBackground() throws Exception {
+                if (quickHealthCheck(host, port, 900)) {
+                    PortOwnershipInfo ownership = detectPortOwnership(host, port);
+                    attachExternalBackend(ownership.pid() == null ? null : ownership);
+                    return BackendStartResult.reused(ownership);
+                }
+
+                PortOwnershipInfo ownership = detectPortOwnership(host, port);
+                if (ownership.listening() && ownership.pid() != null) {
+                    clearExternalBackendAttachment();
+                    return BackendStartResult.portConflict(ownership);
+                }
+
+                clearExternalBackendAttachment();
                 backendController.start();
                 boolean healthy = backendController.waitUntilHealthy(Duration.ofSeconds(20), Duration.ofMillis(500));
                 if (!healthy) {
                     backendController.stop();
                     throw new IOException("Backend failed to become healthy within 20 seconds.");
                 }
-                return null;
+                return BackendStartResult.started();
             }
 
             @Override
             protected void done() {
                 try {
-                    get();
-                    appendBackendLog(ts() + " | [SYSTEM] Backend is healthy.");
-                    styleStatusLabel(connectionLabel, "Connected", COLOR_SUCCESS);
+                    BackendStartResult result = get();
+                    if (result.reusedExisting()) {
+                        appendBackendLog(ts() + " | [SYSTEM] Backend already running; reusing existing server.");
+                        if (result.portOwnerPid() != null) {
+                            appendBackendLog(ts() + " | [SYSTEM] Attached to external backend PID "
+                                    + result.portOwnerPid()
+                                    + (result.portOwnerCommand().isBlank() ? "" : " | " + result.portOwnerCommand()));
+                        }
+                        styleStatusLabel(connectionLabel, "Connected", COLOR_SUCCESS);
+                    } else if (result.blockedByPort()) {
+                        String warning = "Port is in use by PID " + result.portOwnerPid()
+                                + "; cannot start backend. Use Stop Backend or free the port.";
+                        appendBackendLog(ts() + " | [WARN] " + warning);
+                        styleStatusLabel(connectionLabel, "Port conflict on " + host + ":" + port, COLOR_WARNING);
+                    } else {
+                        appendBackendLog(ts() + " | [SYSTEM] Backend is healthy.");
+                        styleStatusLabel(connectionLabel, "Connected", COLOR_SUCCESS);
+                    }
                 } catch (Exception ex) {
                     String message = humanizeError(ex);
                     appendBackendLog(ts() + " | [SYSTEM] Backend start failed: " + message);
@@ -9991,21 +10109,44 @@ public final class DPolarisJavaApp {
             appendBackendLog(ts() + " | [SYSTEM] Stop ignored: backend action already in progress.");
             return;
         }
+        configureClientFromUI();
+        String host = currentHost();
+        int port = currentPort();
         backendActionInFlight = true;
         refreshBackendControls();
         appendBackendLog(ts() + " | [SYSTEM] Stop backend requested.");
-        SwingWorker<Void, Void> worker = new SwingWorker<>() {
+        SwingWorker<BackendStopResult, Void> worker = new SwingWorker<>() {
             @Override
-            protected Void doInBackground() {
-                backendController.stop();
-                return null;
+            protected BackendStopResult doInBackground() {
+                if (backendController.isProcessAlive() || backendController.getState() == BackendController.State.STARTING) {
+                    backendController.stop();
+                    clearExternalBackendAttachment();
+                    return BackendStopResult.managedStoppedResult();
+                }
+
+                if (quickHealthCheck(host, port, 900)) {
+                    PortOwnershipInfo ownership = detectPortOwnership(host, port);
+                    attachExternalBackend(ownership.pid() == null ? null : ownership);
+                    return BackendStopResult.externalRunningResult(ownership);
+                }
+
+                clearExternalBackendAttachment();
+                return BackendStopResult.noopResult();
             }
 
             @Override
             protected void done() {
                 try {
-                    get();
-                    appendBackendLog(ts() + " | [SYSTEM] Backend stopped.");
+                    BackendStopResult result = get();
+                    if (result.externalRunning()) {
+                        String suffix = result.portOwnerPid() == null ? "" : " (PID " + result.portOwnerPid() + ")";
+                        appendBackendLog(ts() + " | [SYSTEM] Backend is external; stop it manually." + suffix);
+                        styleStatusLabel(connectionLabel, "External backend running", COLOR_WARNING);
+                    } else if (result.managedStopped()) {
+                        appendBackendLog(ts() + " | [SYSTEM] Backend stopped.");
+                    } else {
+                        appendBackendLog(ts() + " | [SYSTEM] Backend is not running.");
+                    }
                 } catch (Exception ex) {
                     appendBackendLog(ts() + " | [SYSTEM] Backend stop failed: " + humanizeError(ex));
                 } finally {
@@ -10023,12 +10164,20 @@ public final class DPolarisJavaApp {
             appendBackendLog(ts() + " | [SYSTEM] Restart ignored: backend action already in progress.");
             return;
         }
+        configureClientFromUI();
+        String host = currentHost();
+        int port = currentPort();
         backendActionInFlight = true;
         refreshBackendControls();
         appendBackendLog(ts() + " | [SYSTEM] Restart backend requested.");
         SwingWorker<Void, Void> worker = new SwingWorker<>() {
             @Override
             protected Void doInBackground() throws Exception {
+                if (!backendController.isProcessAlive() && quickHealthCheck(host, port, 900)) {
+                    PortOwnershipInfo ownership = detectPortOwnership(host, port);
+                    attachExternalBackend(ownership.pid() == null ? null : ownership);
+                    throw new IOException("Backend is external; restart it manually.");
+                }
                 backendController.restart();
                 boolean healthy = backendController.waitUntilHealthy(Duration.ofSeconds(20), Duration.ofMillis(500));
                 if (!healthy) {
@@ -10486,11 +10635,25 @@ public final class DPolarisJavaApp {
     }
 
     private void ensureBackendHealthyForTraining() {
-        if (backendController.isHealthy()) {
+        String host = currentHost();
+        int port = currentPort();
+        if (quickHealthCheck(host, port, 900)) {
+            if (!backendController.isProcessAlive()) {
+                PortOwnershipInfo ownership = detectPortOwnership(host, port);
+                attachExternalBackend(ownership.pid() == null ? null : ownership);
+            }
             return;
+        }
+        PortOwnershipInfo ownership = detectPortOwnership(host, port);
+        if (ownership.listening() && ownership.pid() != null) {
+            String message = "Port is in use by PID " + ownership.pid()
+                    + "; cannot auto-start backend. Free the port or stop the external process.";
+            appendTrainingLog(ts() + " | " + message);
+            throw new RuntimeException(message);
         }
         appendTrainingLog(ts() + " | Backend not healthy. Attempting auto-start...");
         try {
+            clearExternalBackendAttachment();
             backendController.start();
             boolean healthy = backendController.waitUntilHealthy(Duration.ofSeconds(20), Duration.ofMillis(500));
             if (!healthy) {
