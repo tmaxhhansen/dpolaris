@@ -352,6 +352,8 @@ public final class DPolarisJavaApp {
     private Map<String, Object> universeCombinedPayload = new LinkedHashMap<>();
     private JList<String> universeApiList;
     private DefaultListModel<String> universeApiListModel;
+    private UniverseListTableModel universeApiListTableModel;
+    private JTable universeApiListTable;
     private JTextField universeApiSearchField;
     private JTextField universeApiSectorFilterField;
     private JTextField universeApiManualNameField;
@@ -364,6 +366,8 @@ public final class DPolarisJavaApp {
     private TableRowSorter<UniverseTableModel> universeApiSorter;
     private Map<String, Object> universeApiPayload = new LinkedHashMap<>();
     private String universeApiActiveName;
+    private String lastUniverseListFailureSignature = "";
+    private long lastUniverseListFailureLogAtMs = 0L;
 
     private JTextField scanRunIdField;
     private JButton scanLoadResultsButton;
@@ -873,13 +877,10 @@ public final class DPolarisJavaApp {
         root.setBackground(COLOR_BG);
 
         universeApiListModel = new DefaultListModel<>();
-        universeApiList = new JList<>(universeApiListModel);
-        universeApiList.setSelectionMode(ListSelectionModel.SINGLE_SELECTION);
-        universeApiList.setBackground(COLOR_LOG_BG);
-        universeApiList.setForeground(COLOR_TEXT);
-        universeApiList.setSelectionBackground(COLOR_MENU_ACTIVE);
-        universeApiList.setSelectionForeground(COLOR_TEXT);
-        universeApiList.setFont(uiFont);
+        universeApiListTableModel = new UniverseListTableModel();
+        universeApiListTable = new JTable(universeApiListTableModel);
+        styleRunsTable(universeApiListTable);
+        universeApiListTable.setSelectionMode(ListSelectionModel.SINGLE_SELECTION);
 
         universeApiSearchField = new JTextField(16);
         universeApiSectorFilterField = new JTextField(12);
@@ -932,7 +933,7 @@ public final class DPolarisJavaApp {
         styleButton(reloadLeftButton, false);
         leftHeader.add(reloadLeftButton, BorderLayout.EAST);
 
-        JScrollPane universeNamesScroll = new JScrollPane(universeApiList);
+        JScrollPane universeNamesScroll = new JScrollPane(universeApiListTable);
         universeNamesScroll.getViewport().setBackground(COLOR_LOG_BG);
         universeNamesScroll.setBorder(new CompoundBorder(
                 new LineBorder(COLOR_BORDER, 1, true),
@@ -949,9 +950,10 @@ public final class DPolarisJavaApp {
         split.setDividerLocation(260);
         split.setBorder(BorderFactory.createEmptyBorder());
 
-        universeApiList.addListSelectionListener(e -> {
+        universeApiListTable.getSelectionModel().addListSelectionListener(e -> {
             if (!e.getValueIsAdjusting()) {
-                String selected = universeApiList.getSelectedValue();
+                UniverseListRow selectedRow = selectedUniverseListRow();
+                String selected = selectedRow == null ? "" : selectedRow.name();
                 if (selected != null && !selected.isBlank()) {
                     loadUniverseApi(selected);
                 }
@@ -1004,12 +1006,29 @@ public final class DPolarisJavaApp {
         if (universeApiRefreshListButton != null) {
             universeApiRefreshListButton.setEnabled(false);
         }
-        styleInlineStatus(universeApiStatusLabel, "Universe API: loading list...", COLOR_WARNING);
+        styleInlineStatus(universeApiStatusLabel, "Universe API: loading /api/universe/list...", COLOR_WARNING);
 
         SwingWorker<List<String>, Void> worker = new SwingWorker<>() {
+            private List<UniverseListRow> rows = List.of();
+            private boolean primarySucceeded = false;
+            private String primaryFailure = "";
+
             @Override
             protected List<String> doInBackground() throws Exception {
-                return apiClient.fetchUniverseNames();
+                try {
+                    Object primary = apiClient.fetchUniverseList();
+                    rows = parseUniverseListRows(primary);
+                    primarySucceeded = true;
+                    if (!rows.isEmpty()) {
+                        return rows.stream().map(UniverseListRow::name).toList();
+                    }
+                    return List.of();
+                } catch (Exception ex) {
+                    primaryFailure = humanizeError(ex);
+                }
+                List<String> fallbackNames = apiClient.fetchUniverseNames();
+                rows = toUniverseListRows(fallbackNames);
+                return fallbackNames;
             }
 
             @Override
@@ -1023,31 +1042,52 @@ public final class DPolarisJavaApp {
                     for (String name : names) {
                         universeApiListModel.addElement(name);
                     }
+                    if (universeApiListTableModel != null) {
+                        universeApiListTableModel.setRows(rows);
+                    }
                     if (names.isEmpty()) {
-                        styleInlineStatus(
-                                universeApiStatusLabel,
-                                "Universe list is empty. You can still enter a universe name manually.",
-                                COLOR_WARNING
-                        );
+                        styleInlineStatus(universeApiStatusLabel,
+                                "No universe files found. Add files under dpolaris_ai/universe/.",
+                                COLOR_WARNING);
                         universeApiTableModel.setRows(List.of());
                         styleInlineStatus(universeApiMetaLabel, "Rows: 0", COLOR_MUTED);
                         return;
                     }
-                    String source = firstNonBlank(apiClient.universeNamesLastSource(), "(unknown)");
+                    String source = primarySucceeded
+                            ? "/api/universe/list"
+                            : firstNonBlank(apiClient.universeNamesLastSource(), "(unknown)");
                     appendBackendLog(ts() + " | Universe list loaded via " + source);
+                    if (!primarySucceeded && !primaryFailure.isBlank()) {
+                        logUniverseListFailureDebounced("Primary /api/universe/list failed, fallback used: " + primaryFailure);
+                    }
                     styleInlineStatus(universeApiStatusLabel, "Universe API: loaded " + names.size() + " universes", COLOR_SUCCESS);
                     if (universeApiActiveName != null && names.contains(universeApiActiveName)) {
-                        universeApiList.setSelectedValue(universeApiActiveName, true);
+                        selectUniverseListRowByName(universeApiActiveName);
                     } else {
-                        universeApiList.setSelectedIndex(0);
+                        selectUniverseListRowByIndex(0);
                     }
                 } catch (Exception ex) {
+                    String message = humanizeError(ex);
+                    if (isUniverseListServiceError(message)) {
+                        styleInlineStatus(
+                                universeApiStatusLabel,
+                                "Universe list endpoint unavailable (404/503). Use fix command, then refresh.",
+                                COLOR_WARNING
+                        );
+                        showUniverseListFixCommandDialog(message);
+                    } else {
+                        styleInlineStatus(
+                                universeApiStatusLabel,
+                                "Universe list endpoint is unavailable. You can still type a universe name manually.",
+                                COLOR_WARNING
+                        );
+                    }
                     styleInlineStatus(
-                            universeApiStatusLabel,
-                            "Universe list endpoint is unavailable. You can still type a universe name manually.",
-                            COLOR_WARNING
+                            universeApiMetaLabel,
+                            "Rows: 0",
+                            COLOR_MUTED
                     );
-                    appendBackendLog(ts() + " | Universe list fetch failed: " + humanizeError(ex));
+                    logUniverseListFailureDebounced("Universe list fetch failed: " + message);
                 }
             }
         };
@@ -1061,6 +1101,194 @@ public final class DPolarisJavaApp {
             return;
         }
         loadUniverseApi(name);
+    }
+
+    private UniverseListRow selectedUniverseListRow() {
+        if (universeApiListTable == null || universeApiListTableModel == null) {
+            return null;
+        }
+        int selected = universeApiListTable.getSelectedRow();
+        if (selected < 0) {
+            return null;
+        }
+        int modelRow = universeApiListTable.convertRowIndexToModel(selected);
+        return universeApiListTableModel.getRow(modelRow);
+    }
+
+    private void selectUniverseListRowByName(String name) {
+        if (universeApiListTableModel == null || universeApiListTable == null || name == null) {
+            return;
+        }
+        for (int i = 0; i < universeApiListTableModel.getRowCount(); i++) {
+            UniverseListRow row = universeApiListTableModel.getRow(i);
+            if (row != null && name.equalsIgnoreCase(row.name())) {
+                int viewRow = universeApiListTable.convertRowIndexToView(i);
+                if (viewRow >= 0) {
+                    universeApiListTable.setRowSelectionInterval(viewRow, viewRow);
+                    universeApiListTable.scrollRectToVisible(universeApiListTable.getCellRect(viewRow, 0, true));
+                }
+                return;
+            }
+        }
+    }
+
+    private void selectUniverseListRowByIndex(int index) {
+        if (universeApiListTable == null || universeApiListTableModel == null) {
+            return;
+        }
+        if (index < 0 || index >= universeApiListTableModel.getRowCount()) {
+            return;
+        }
+        int viewRow = universeApiListTable.convertRowIndexToView(index);
+        if (viewRow >= 0) {
+            universeApiListTable.setRowSelectionInterval(viewRow, viewRow);
+            universeApiListTable.scrollRectToVisible(universeApiListTable.getCellRect(viewRow, 0, true));
+        }
+    }
+
+    private List<UniverseListRow> parseUniverseListRows(Object payload) {
+        List<UniverseListRow> rows = new ArrayList<>();
+        if (payload instanceof List<?> list) {
+            for (Object item : list) {
+                UniverseListRow row = toUniverseListRow(item);
+                if (row != null) {
+                    rows.add(row);
+                }
+            }
+            return rows;
+        }
+        if (payload instanceof Map<?, ?> mapRaw) {
+            Map<String, Object> map = Json.asObject(mapRaw);
+            Object universes = findAnyValue(map, "universes", "items", "data", "list");
+            if (universes instanceof List<?> list) {
+                for (Object item : list) {
+                    UniverseListRow row = toUniverseListRow(item);
+                    if (row != null) {
+                        rows.add(row);
+                    }
+                }
+            } else {
+                for (Map.Entry<String, Object> entry : map.entrySet()) {
+                    String name = firstNonBlank(entry.getKey(), "");
+                    if (name.isBlank() || looksLikeUniverseMetaKey(name)) {
+                        continue;
+                    }
+                    int count = inferUniverseCount(entry.getValue());
+                    rows.add(new UniverseListRow(name, count, "n/a"));
+                }
+            }
+        }
+        return rows;
+    }
+
+    private List<UniverseListRow> toUniverseListRows(List<String> names) {
+        List<UniverseListRow> rows = new ArrayList<>();
+        if (names == null) {
+            return rows;
+        }
+        for (String name : names) {
+            String safe = firstNonBlank(name, "").trim();
+            if (!safe.isBlank()) {
+                rows.add(new UniverseListRow(safe, -1, "n/a"));
+            }
+        }
+        return rows;
+    }
+
+    private UniverseListRow toUniverseListRow(Object item) {
+        if (item == null) {
+            return null;
+        }
+        if (item instanceof String str) {
+            String name = firstNonBlank(str, "").trim();
+            if (name.isBlank()) {
+                return null;
+            }
+            return new UniverseListRow(name, -1, "n/a");
+        }
+        if (!(item instanceof Map<?, ?> mapRaw)) {
+            return null;
+        }
+        Map<String, Object> map = Json.asObject(mapRaw);
+        String name = firstNonBlank(
+                stringOrEmpty(findAnyValue(map, "name", "id", "universe")),
+                ""
+        ).trim();
+        if (name.isBlank()) {
+            return null;
+        }
+        int count = inferUniverseCount(findAnyValue(map, "count", "symbol_count", "size", "symbols"));
+        String updated = firstNonBlank(
+                stringOrEmpty(findAnyValue(map, "updated", "updated_at", "generated_at")),
+                "n/a"
+        );
+        return new UniverseListRow(name, count, updated);
+    }
+
+    private int inferUniverseCount(Object value) {
+        if (value instanceof Number number) {
+            return Math.max(0, number.intValue());
+        }
+        if (value instanceof List<?> list) {
+            return list.size();
+        }
+        if (value instanceof Map<?, ?> mapRaw) {
+            Map<String, Object> map = Json.asObject(mapRaw);
+            Object symbols = findAnyValue(map, "symbols", "tickers", "items", "data");
+            if (symbols instanceof List<?> list) {
+                return list.size();
+            }
+        }
+        return -1;
+    }
+
+    private boolean looksLikeUniverseMetaKey(String key) {
+        String lower = safeLower(key);
+        return lower.contains("updated")
+                || lower.contains("generated")
+                || lower.contains("status")
+                || lower.contains("detail")
+                || lower.contains("message")
+                || lower.contains("error");
+    }
+
+    private boolean isUniverseListServiceError(String message) {
+        String text = safeLower(message);
+        return text.contains("http 404") || text.contains("http 503");
+    }
+
+    private void showUniverseListFixCommandDialog(String failureMessage) {
+        String fixCommand = "powershell -ExecutionPolicy Bypass -File C:\\my-git\\dpolaris_ops\\run.ps1 -StartUI";
+        String details = "Universe list request failed.\n\n"
+                + "Reason: " + firstNonBlank(failureMessage, "unknown") + "\n\n"
+                + "Try this command, then click Refresh List:\n" + fixCommand;
+        Object[] options = {"Copy Fix Command", "Close"};
+        int selected = JOptionPane.showOptionDialog(
+                frame,
+                details,
+                "Universe List Unavailable",
+                JOptionPane.DEFAULT_OPTION,
+                JOptionPane.WARNING_MESSAGE,
+                null,
+                options,
+                options[1]
+        );
+        if (selected == 0) {
+            Toolkit.getDefaultToolkit().getSystemClipboard().setContents(new StringSelection(fixCommand), null);
+            appendBackendLog(ts() + " | [SYSTEM] Copied universe fix command to clipboard.");
+        }
+    }
+
+    private void logUniverseListFailureDebounced(String message) {
+        String signature = firstNonBlank(message, "unknown");
+        long now = System.currentTimeMillis();
+        if (signature.equals(lastUniverseListFailureSignature)
+                && (now - lastUniverseListFailureLogAtMs) < 20_000L) {
+            return;
+        }
+        lastUniverseListFailureSignature = signature;
+        lastUniverseListFailureLogAtMs = now;
+        appendBackendLog(ts() + " | " + signature);
     }
 
     private void loadUniverseApi(String universeName) {
@@ -13536,6 +13764,56 @@ public final class DPolarisJavaApp {
         });
     }
 
+    private static final class UniverseListTableModel extends AbstractTableModel {
+        private static final String[] COLUMNS = {"Name", "Count", "Updated"};
+        private List<UniverseListRow> rows = new ArrayList<>();
+
+        @Override
+        public int getRowCount() {
+            return rows.size();
+        }
+
+        @Override
+        public int getColumnCount() {
+            return COLUMNS.length;
+        }
+
+        @Override
+        public String getColumnName(int column) {
+            return COLUMNS[column];
+        }
+
+        @Override
+        public Object getValueAt(int rowIndex, int columnIndex) {
+            UniverseListRow row = rows.get(rowIndex);
+            return switch (columnIndex) {
+                case 0 -> row.name();
+                case 1 -> row.count() < 0 ? "n/a" : String.valueOf(row.count());
+                case 2 -> row.updated();
+                default -> "";
+            };
+        }
+
+        void setRows(List<UniverseListRow> rows) {
+            this.rows = rows == null ? new ArrayList<>() : new ArrayList<>(rows);
+            fireTableDataChanged();
+        }
+
+        UniverseListRow getRow(int rowIndex) {
+            if (rowIndex < 0 || rowIndex >= rows.size()) {
+                return null;
+            }
+            return rows.get(rowIndex);
+        }
+    }
+
+    private record UniverseListRow(
+            String name,
+            int count,
+            String updated
+    ) {
+    }
+
     private void onBackendControllerLog(String stream, String message) {
         appendBackendLog(ts() + " | [" + stream + "] " + message);
     }
@@ -13557,6 +13835,10 @@ public final class DPolarisJavaApp {
     private static final Color CONTROL_PANEL_NEUTRAL_PRESSED_BG = new Color(65, 72, 88);
     private static final Color CONTROL_PANEL_DISABLED_BG = new Color(56, 61, 72);
     private static final Color CONTROL_PANEL_DISABLED_FG = new Color(173, 181, 197);
+    private static final Color CONTROL_PANEL_PRIMARY_BORDER = new Color(122, 168, 240);
+    private static final Color CONTROL_PANEL_DANGER_BORDER = new Color(213, 113, 125);
+    private static final Color CONTROL_PANEL_NEUTRAL_BORDER = new Color(168, 177, 196);
+    private static final Color CONTROL_PANEL_DISABLED_BORDER = new Color(94, 102, 120);
 
     private static final class BackendControlButtonHoverAdapter extends MouseAdapter {
         @Override
@@ -13824,7 +14106,8 @@ public final class DPolarisJavaApp {
                 button,
                 CONTROL_PANEL_PRIMARY_BG,
                 CONTROL_PANEL_PRIMARY_HOVER_BG,
-                CONTROL_PANEL_PRIMARY_PRESSED_BG
+                CONTROL_PANEL_PRIMARY_PRESSED_BG,
+                CONTROL_PANEL_PRIMARY_BORDER
         );
     }
 
@@ -13833,7 +14116,8 @@ public final class DPolarisJavaApp {
                 button,
                 CONTROL_PANEL_DANGER_BG,
                 CONTROL_PANEL_DANGER_HOVER_BG,
-                CONTROL_PANEL_DANGER_PRESSED_BG
+                CONTROL_PANEL_DANGER_PRESSED_BG,
+                CONTROL_PANEL_DANGER_BORDER
         );
     }
 
@@ -13842,24 +14126,28 @@ public final class DPolarisJavaApp {
                 button,
                 CONTROL_PANEL_NEUTRAL_BG,
                 CONTROL_PANEL_NEUTRAL_HOVER_BG,
-                CONTROL_PANEL_NEUTRAL_PRESSED_BG
+                CONTROL_PANEL_NEUTRAL_PRESSED_BG,
+                CONTROL_PANEL_NEUTRAL_BORDER
         );
     }
 
-    private void applyBackendControlButtonStyle(JButton button, Color base, Color hover, Color pressed) {
+    private void applyBackendControlButtonStyle(JButton button, Color base, Color hover, Color pressed, Color border) {
         if (button == null) {
             return;
         }
         button.setUI(new BasicButtonUI());
         button.setOpaque(true);
         button.setContentAreaFilled(true);
-        button.setBorderPainted(false);
+        button.setBorderPainted(true);
         button.setFocusPainted(false);
         button.setRolloverEnabled(true);
         button.setFont(uiFont.deriveFont(Font.BOLD, 13f));
         button.setForeground(button.isEnabled() ? Color.WHITE : CONTROL_PANEL_DISABLED_FG);
         button.setBackground(button.isEnabled() ? base : CONTROL_PANEL_DISABLED_BG);
-        button.setBorder(new EmptyBorder(8, 14, 8, 14));
+        button.setBorder(new CompoundBorder(
+                new LineBorder(button.isEnabled() ? border : CONTROL_PANEL_DISABLED_BORDER, 1, true),
+                new EmptyBorder(7, 13, 7, 13)
+        ));
         button.setMargin(new Insets(8, 14, 8, 14));
         button.putClientProperty("dpolaris.ctrl.base", button.isEnabled() ? base : CONTROL_PANEL_DISABLED_BG);
         button.putClientProperty("dpolaris.ctrl.hover", button.isEnabled() ? hover : CONTROL_PANEL_DISABLED_BG);
