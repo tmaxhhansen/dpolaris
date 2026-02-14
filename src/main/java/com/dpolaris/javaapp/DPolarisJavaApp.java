@@ -8086,14 +8086,14 @@ public final class DPolarisJavaApp {
         stylePrimary(startBackendButton);
         styleDanger(stopBackendButton);
         styleSecondary(restartBackendButton);
-        styleSecondary(saveBackendLogsButton);
+        styleActionButton(saveBackendLogsButton);
         stylePrimary(startDaemonButton);
         styleDanger(stopDaemonButton);
         styleSecondary(clearBackendLogsButton);
         styleButton(refreshOrchestratorStatusButton, false);
-        styleInlineStatus(backendStatusValue, "STOPPED", COLOR_MUTED);
-        styleInlineStatus(daemonStatusValue, "Scheduler: unknown", COLOR_MUTED);
-        styleInlineStatus(orchestratorStatusValue, "Orchestrator: unknown", COLOR_MUTED);
+        styleStatusPill(backendStatusValue, "STOPPED");
+        styleStatusPill(daemonStatusValue, "Scheduler: unknown");
+        styleStatusPill(orchestratorStatusValue, "Orchestrator: unknown");
 
         clearBackendLogsButton.addActionListener(e -> {
             synchronized (backendLogBuffer) {
@@ -8103,7 +8103,7 @@ public final class DPolarisJavaApp {
             if (saveBackendLogsButton != null) {
                 saveBackendLogsButton.setEnabled(false);
             }
-            styleSecondary(saveBackendLogsButton);
+            styleActionButton(saveBackendLogsButton);
         });
 
         JLabel pathLabel = createFormLabel("AI Backend Path");
@@ -9932,18 +9932,18 @@ public final class DPolarisJavaApp {
             return;
         }
         if (running) {
-            styleInlineStatus(backendStatusValue, "RUNNING", COLOR_SUCCESS);
+            styleStatusPill(backendStatusValue, "RUNNING");
             return;
         }
         if (starting) {
-            styleInlineStatus(backendStatusValue, "STARTING", COLOR_WARNING);
+            styleStatusPill(backendStatusValue, "STARTING");
             return;
         }
         if (errored) {
-            styleInlineStatus(backendStatusValue, "ERROR", COLOR_DANGER);
+            styleStatusPill(backendStatusValue, "ERROR");
             return;
         }
-        styleInlineStatus(backendStatusValue, "STOPPED", COLOR_MUTED);
+        styleStatusPill(backendStatusValue, "STOPPED");
     }
 
     private void startBackendProcess() {
@@ -11399,7 +11399,7 @@ public final class DPolarisJavaApp {
     private void setDaemonStatus(String text, Color color) {
         SwingUtilities.invokeLater(() -> {
             if (daemonStatusValue != null) {
-                styleInlineStatus(daemonStatusValue, text, color);
+                styleStatusPill(daemonStatusValue, text);
             }
         });
     }
@@ -11407,7 +11407,7 @@ public final class DPolarisJavaApp {
     private void setOrchestratorStatus(String text, Color color) {
         SwingUtilities.invokeLater(() -> {
             if (orchestratorStatusValue != null) {
-                styleInlineStatus(orchestratorStatusValue, text, color);
+                styleStatusPill(orchestratorStatusValue, text);
             }
         });
     }
@@ -12913,8 +12913,76 @@ public final class DPolarisJavaApp {
         DANGER
     }
 
-    private void stylePrimary(JButton button) {
+    private void styleActionButton(JButton button) {
+        if (button == null) {
+            return;
+        }
+        button.setFont(uiFont.deriveFont(Font.BOLD, 13f));
+        button.setOpaque(true);
+        button.setContentAreaFilled(true);
+        button.setBorderPainted(true);
+        button.setFocusPainted(false);
+        button.setRolloverEnabled(false);
+        button.setPreferredSize(CONTROL_BUTTON_SIZE);
+        button.setMinimumSize(CONTROL_BUTTON_SIZE);
+        button.setMargin(new Insets(0, 12, 0, 12));
+        button.setBackground(new Color(96, 106, 128));
+        button.setForeground(new Color(249, 251, 255));
+        button.setBorder(new CompoundBorder(
+                new LineBorder(new Color(160, 171, 197), 1, true),
+                new EmptyBorder(7, 12, 7, 12)
+        ));
+    }
+
+    private void stylePrimaryButton(JButton button) {
         styleControlButton(button, ButtonTone.PRIMARY);
+    }
+
+    private void styleDangerButton(JButton button) {
+        styleControlButton(button, ButtonTone.DANGER);
+    }
+
+    private void styleStatusPill(JComponent component, String state) {
+        if (component == null) {
+            return;
+        }
+        if (component instanceof JLabel label) {
+            label.setText(state);
+            label.setFont(uiFont.deriveFont(Font.BOLD, 12f));
+            label.setOpaque(true);
+            label.setForeground(new Color(250, 251, 255));
+            label.setBackground(backgroundForStatusState(state));
+            label.setBorder(new CompoundBorder(
+                    new LineBorder(borderForStatusState(state), 1, true),
+                    new EmptyBorder(4, 10, 4, 10)
+            ));
+        }
+    }
+
+    private Color backgroundForStatusState(String state) {
+        String token = safeLower(state);
+        if (token.contains("run") || token.contains("healthy") || token.contains("connect")) {
+            return new Color(46, 135, 83);
+        }
+        if (token.contains("error") || token.contains("fail")) {
+            return new Color(173, 64, 69);
+        }
+        return new Color(176, 123, 34);
+    }
+
+    private Color borderForStatusState(String state) {
+        String token = safeLower(state);
+        if (token.contains("run") || token.contains("healthy") || token.contains("connect")) {
+            return new Color(88, 178, 124);
+        }
+        if (token.contains("error") || token.contains("fail")) {
+            return new Color(214, 112, 117);
+        }
+        return new Color(226, 173, 80);
+    }
+
+    private void stylePrimary(JButton button) {
+        stylePrimaryButton(button);
     }
 
     private void styleSecondary(JButton button) {
@@ -12922,7 +12990,7 @@ public final class DPolarisJavaApp {
     }
 
     private void styleDanger(JButton button) {
-        styleControlButton(button, ButtonTone.DANGER);
+        styleDangerButton(button);
     }
 
     private void applyBackendButtonState(JButton button, boolean enabled, ButtonTone tone) {
@@ -12930,6 +12998,10 @@ public final class DPolarisJavaApp {
             return;
         }
         button.setEnabled(enabled);
+        if (button == saveBackendLogsButton) {
+            styleActionButton(button);
+            return;
+        }
         styleControlButton(button, tone);
     }
 
