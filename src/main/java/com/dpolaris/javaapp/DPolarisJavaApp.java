@@ -9546,19 +9546,28 @@ public final class DPolarisJavaApp {
     private record BackendStopResult(
             boolean managedStopped,
             boolean externalRunning,
-            Integer portOwnerPid
+            boolean externalKilled,
+            Integer portOwnerPid,
+            String portOwnerCommand
     ) {
         static BackendStopResult managedStoppedResult() {
-            return new BackendStopResult(true, false, null);
+            return new BackendStopResult(true, false, false, null, "");
         }
 
         static BackendStopResult externalRunningResult(PortOwnershipInfo ownership) {
             Integer pid = ownership == null ? null : ownership.pid();
-            return new BackendStopResult(false, true, pid);
+            String command = ownership == null || ownership.commandLine() == null ? "" : ownership.commandLine();
+            return new BackendStopResult(false, true, false, pid, command);
+        }
+
+        static BackendStopResult externalKilledResult(PortOwnershipInfo ownership) {
+            Integer pid = ownership == null ? null : ownership.pid();
+            String command = ownership == null || ownership.commandLine() == null ? "" : ownership.commandLine();
+            return new BackendStopResult(false, false, true, pid, command);
         }
 
         static BackendStopResult noopResult() {
-            return new BackendStopResult(false, false, null);
+            return new BackendStopResult(false, false, false, null, "");
         }
     }
 
@@ -10203,6 +10212,16 @@ public final class DPolarisJavaApp {
                 if (quickHealthCheck(host, port, 900)) {
                     PortOwnershipInfo ownership = detectPortOwnership(host, port);
                     attachExternalBackend(ownership.pid() == null ? null : ownership);
+                    if (ownership.pid() != null && isLikelyDpolarisBackendOwner(ownership.commandLine())) {
+                        appendBackendLog(ts() + " | [SYSTEM] External backend detected on " + host + ":" + port
+                                + " PID " + ownership.pid() + " | " + truncateForDetail(ownership.commandLine()));
+                        boolean killed = killProcessByPid(ownership.pid());
+                        boolean cleared = killed && waitForPortToClear(host, port, 3000);
+                        if (cleared) {
+                            clearExternalBackendAttachment();
+                            return BackendStopResult.externalKilledResult(ownership);
+                        }
+                    }
                     return BackendStopResult.externalRunningResult(ownership);
                 }
 
@@ -10214,9 +10233,18 @@ public final class DPolarisJavaApp {
             protected void done() {
                 try {
                     BackendStopResult result = get();
-                    if (result.externalRunning()) {
+                    if (result.externalKilled()) {
+                        appendBackendLog(ts() + " | [SYSTEM] External backend stopped (PID "
+                                + firstNonBlank(result.portOwnerPid() == null ? "" : String.valueOf(result.portOwnerPid()), "unknown")
+                                + ").");
+                        styleStatusLabel(connectionLabel, "Stopped", COLOR_MUTED);
+                    } else if (result.externalRunning()) {
                         String suffix = result.portOwnerPid() == null ? "" : " (PID " + result.portOwnerPid() + ")";
                         appendBackendLog(ts() + " | [SYSTEM] Backend is external; stop it manually." + suffix);
+                        if (!firstNonBlank(result.portOwnerCommand(), "").isBlank()) {
+                            appendBackendLog(ts() + " | [SYSTEM] External owner command: "
+                                    + truncateForDetail(result.portOwnerCommand()));
+                        }
                         styleStatusLabel(connectionLabel, "External backend running", COLOR_WARNING);
                     } else if (result.managedStopped()) {
                         appendBackendLog(ts() + " | [SYSTEM] Backend stopped.");
