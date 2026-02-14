@@ -10,6 +10,7 @@ import java.nio.charset.StandardCharsets;
 import java.time.Duration;
 import java.util.ArrayList;
 import java.util.LinkedHashMap;
+import java.util.LinkedHashSet;
 import java.util.List;
 import java.util.Map;
 
@@ -17,6 +18,9 @@ final class ApiClient {
     private final HttpClient client;
     private String host;
     private int port;
+    private volatile String universeNamesLastSource = "";
+    private volatile long universeNamesLastFailureLogAtMs = 0L;
+    private volatile String universeNamesLastFailureMessage = "";
 
     ApiClient(String host, int port) {
         this.client = HttpClient.newBuilder()
@@ -102,6 +106,51 @@ final class ApiClient {
                 null,
                 30
         );
+    }
+
+    public List<String> fetchUniverseNames() throws IOException, InterruptedException {
+        List<String> endpoints = List.of(
+                "/api/universe/list",
+                "/api/scan/universe/list",
+                "/api/scan/universe?name=all",
+                "/scan/universe?name=all"
+        );
+
+        IOException lastIo = null;
+        for (String endpoint : endpoints) {
+            try {
+                Object response = request("GET", endpoint, null, 30);
+                List<String> names = extractUniverseNames(response);
+                if (!names.isEmpty()) {
+                    universeNamesLastSource = endpoint;
+                    return names;
+                }
+                logUniverseNamesFailureRateLimited(
+                        "Universe names response from " + endpoint + " had no usable names."
+                );
+            } catch (IOException ex) {
+                lastIo = ex;
+                String message = ex.getMessage() == null ? "" : ex.getMessage();
+                if (isUniverseNamesRetryable(message)) {
+                    logUniverseNamesFailureRateLimited(
+                            "Universe names retrying after " + endpoint + " failed: " + message
+                    );
+                    continue;
+                }
+                logUniverseNamesFailureRateLimited(
+                        "Universe names fallback continuing after " + endpoint + " failed: " + message
+                );
+            }
+        }
+
+        if (lastIo != null) {
+            throw lastIo;
+        }
+        throw new IOException("Universe list endpoint is unavailable.");
+    }
+
+    String universeNamesLastSource() {
+        return universeNamesLastSource == null ? "" : universeNamesLastSource;
     }
 
     Object fetchUniverseByName(String universeName) throws IOException, InterruptedException {
@@ -481,6 +530,110 @@ final class ApiClient {
                 || message.contains("timeout");
     }
 
+    private List<String> extractUniverseNames(Object payload) {
+        LinkedHashSet<String> out = new LinkedHashSet<>();
+        collectUniverseNames(payload, out, 0);
+        return new ArrayList<>(out);
+    }
+
+    private void collectUniverseNames(Object payload, LinkedHashSet<String> out, int depth) {
+        if (payload == null || depth > 4) {
+            return;
+        }
+        if (payload instanceof List<?> list) {
+            for (Object item : list) {
+                if (item instanceof String str) {
+                    addUniverseName(out, str);
+                } else if (item instanceof Map<?, ?> mapRaw) {
+                    Map<String, Object> map = Json.asObject(mapRaw);
+                    Object name = firstNonNull(map.get("name"), map.get("id"), map.get("universe"));
+                    if (name != null) {
+                        addUniverseName(out, String.valueOf(name));
+                    }
+                }
+            }
+            return;
+        }
+        if (!(payload instanceof Map<?, ?> mapRaw)) {
+            return;
+        }
+
+        Map<String, Object> map = Json.asObject(mapRaw);
+        Object candidate = firstNonNull(
+                map.get("universes"),
+                map.get("names"),
+                map.get("list"),
+                map.get("items"),
+                map.get("data"),
+                map.get("universe_names"),
+                map.get("universeNames")
+        );
+        if (candidate != null) {
+            collectUniverseNames(candidate, out, depth + 1);
+        }
+
+        if (out.isEmpty()) {
+            for (Map.Entry<String, Object> entry : map.entrySet()) {
+                String key = sanitizeUniverseName(entry.getKey());
+                if (key.isEmpty() || isMetadataKey(key)) {
+                    continue;
+                }
+                Object value = entry.getValue();
+                if (value instanceof List<?> || value instanceof Map<?, ?>) {
+                    out.add(key);
+                }
+            }
+        }
+    }
+
+    private boolean isMetadataKey(String key) {
+        String token = key.toLowerCase();
+        return token.equals("detail")
+                || token.equals("message")
+                || token.equals("status")
+                || token.equals("error")
+                || token.equals("generated_at")
+                || token.equals("updated_at")
+                || token.equals("name");
+    }
+
+    private void addUniverseName(LinkedHashSet<String> out, String value) {
+        String name = sanitizeUniverseName(value);
+        if (!name.isEmpty()) {
+            out.add(name);
+        }
+    }
+
+    private String sanitizeUniverseName(String value) {
+        if (value == null) {
+            return "";
+        }
+        String text = value.trim();
+        if (text.isEmpty() || "null".equalsIgnoreCase(text)) {
+            return "";
+        }
+        return text;
+    }
+
+    private boolean isUniverseNamesRetryable(String message) {
+        String text = message == null ? "" : message.toLowerCase();
+        return text.contains("http 404")
+                || text.contains("\"detail\":\"not found\"")
+                || text.contains("universe file not found for 'list'");
+    }
+
+    private void logUniverseNamesFailureRateLimited(String message) {
+        long now = System.currentTimeMillis();
+        String text = message == null ? "unknown universe-list error" : message;
+        if ((now - universeNamesLastFailureLogAtMs) < 30_000L
+                && text.equals(universeNamesLastFailureMessage)) {
+            return;
+        }
+        universeNamesLastFailureLogAtMs = now;
+        universeNamesLastFailureMessage = text;
+        System.err.println("[ApiClient] " + text);
+    }
+
     private String baseUrl() {
         return "http://" + host + ":" + port;
     }
@@ -499,5 +652,17 @@ final class ApiClient {
 
     private static String encode(String value) {
         return URLEncoder.encode(value, StandardCharsets.UTF_8);
+    }
+
+    private static Object firstNonNull(Object... values) {
+        if (values == null) {
+            return null;
+        }
+        for (Object value : values) {
+            if (value != null) {
+                return value;
+            }
+        }
+        return null;
     }
 }

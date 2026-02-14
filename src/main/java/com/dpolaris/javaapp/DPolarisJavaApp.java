@@ -352,7 +352,9 @@ public final class DPolarisJavaApp {
     private DefaultListModel<String> universeApiListModel;
     private JTextField universeApiSearchField;
     private JTextField universeApiSectorFilterField;
+    private JTextField universeApiManualNameField;
     private JButton universeApiRefreshListButton;
+    private JButton universeApiManualLoadButton;
     private JLabel universeApiStatusLabel;
     private JLabel universeApiMetaLabel;
     private UniverseTableModel universeApiTableModel;
@@ -878,13 +880,20 @@ public final class DPolarisJavaApp {
 
         universeApiSearchField = new JTextField(16);
         universeApiSectorFilterField = new JTextField(12);
+        universeApiManualNameField = new JTextField(16);
         universeApiRefreshListButton = new JButton("Refresh List");
+        universeApiManualLoadButton = new JButton("Load");
         universeApiStatusLabel = new JLabel();
         universeApiMetaLabel = new JLabel();
 
         styleInputField(universeApiSearchField);
         styleInputField(universeApiSectorFilterField);
+        styleInputField(universeApiManualNameField);
         styleButton(universeApiRefreshListButton, true);
+        styleButton(universeApiManualLoadButton, false);
+        universeApiManualNameField.setToolTipText("e.g., all or nasdaq_top_500");
+        universeApiManualNameField.setText("all");
+        universeApiManualLoadButton.setToolTipText("Load universe by name");
         styleInlineStatus(universeApiStatusLabel, "Universe API: idle", COLOR_MUTED);
         styleInlineStatus(universeApiMetaLabel, "Rows: 0", COLOR_MUTED);
 
@@ -901,6 +910,9 @@ public final class DPolarisJavaApp {
         filters.add(universeApiSearchField);
         filters.add(createFormLabel("Sector"));
         filters.add(universeApiSectorFilterField);
+        filters.add(createFormLabel("Universe name"));
+        filters.add(universeApiManualNameField);
+        filters.add(universeApiManualLoadButton);
         filters.add(universeApiRefreshListButton);
         filters.add(universeApiStatusLabel);
         filters.add(universeApiMetaLabel);
@@ -944,6 +956,8 @@ public final class DPolarisJavaApp {
         });
         universeApiRefreshListButton.addActionListener(e -> refreshUniverseApiList());
         reloadLeftButton.addActionListener(e -> refreshUniverseApiList());
+        universeApiManualLoadButton.addActionListener(e -> loadUniverseApiFromManualInput());
+        universeApiManualNameField.addActionListener(e -> loadUniverseApiFromManualInput());
         universeApiSearchField.getDocument().addDocumentListener(new DocumentListener() {
             @Override
             public void insertUpdate(DocumentEvent e) {
@@ -992,8 +1006,7 @@ public final class DPolarisJavaApp {
         SwingWorker<List<String>, Void> worker = new SwingWorker<>() {
             @Override
             protected List<String> doInBackground() throws Exception {
-                Object response = apiClient.fetchUniverseList();
-                return parseUniverseApiNames(response);
+                return apiClient.fetchUniverseNames();
             }
 
             @Override
@@ -1013,6 +1026,8 @@ public final class DPolarisJavaApp {
                         styleInlineStatus(universeApiMetaLabel, "Rows: 0", COLOR_MUTED);
                         return;
                     }
+                    String source = firstNonBlank(apiClient.universeNamesLastSource(), "(unknown)");
+                    appendBackendLog(ts() + " | Universe list loaded via " + source);
                     styleInlineStatus(universeApiStatusLabel, "Universe API: loaded " + names.size() + " universes", COLOR_SUCCESS);
                     if (universeApiActiveName != null && names.contains(universeApiActiveName)) {
                         universeApiList.setSelectedValue(universeApiActiveName, true);
@@ -1020,12 +1035,25 @@ public final class DPolarisJavaApp {
                         universeApiList.setSelectedIndex(0);
                     }
                 } catch (Exception ex) {
-                    styleInlineStatus(universeApiStatusLabel, "Universe API: list failed", COLOR_DANGER);
+                    styleInlineStatus(
+                            universeApiStatusLabel,
+                            "Universe list endpoint is unavailable. You can still type a universe name manually.",
+                            COLOR_WARNING
+                    );
                     appendBackendLog(ts() + " | Universe list fetch failed: " + humanizeError(ex));
                 }
             }
         };
         worker.execute();
+    }
+
+    private void loadUniverseApiFromManualInput() {
+        String name = universeApiManualNameField == null ? "" : universeApiManualNameField.getText().trim();
+        if (name.isBlank()) {
+            styleInlineStatus(universeApiStatusLabel, "Universe API: enter a universe name first", COLOR_WARNING);
+            return;
+        }
+        loadUniverseApi(name);
     }
 
     private void loadUniverseApi(String universeName) {
