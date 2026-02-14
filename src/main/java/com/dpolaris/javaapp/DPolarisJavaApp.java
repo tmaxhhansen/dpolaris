@@ -1017,10 +1017,14 @@ public final class DPolarisJavaApp {
                         universeApiListModel.addElement(name);
                     }
                     if (!listError.isBlank()) {
-                        String message = "Universe list endpoint unavailable. Trying fallback universe 'all'.";
+                        String fallbackUniverse = "nasdaq100";
+                        String message = isUniverseListUnsupported(listError)
+                                ? "Backend does not support /api/universe/list yet."
+                                : "Universe list endpoint unavailable. Trying fallback universe '" + fallbackUniverse + "'.";
                         styleInlineStatus(universeApiStatusLabel, message, COLOR_WARNING);
                         logUniverseListFailureDebounced("Universe list fetch failed: " + listError);
-                        loadUniverseApi("all");
+                        appendBackendLog(ts() + " | [WARN] Universe list fallback -> /api/scan/universe?name=" + fallbackUniverse);
+                        loadUniverseApi(fallbackUniverse);
                         return;
                     }
                     if (names.isEmpty()) {
@@ -1058,6 +1062,13 @@ public final class DPolarisJavaApp {
         universeListLastErrorSignature = signature;
         universeListLastErrorAtMs = now;
         appendBackendLog(ts() + " | " + signature);
+    }
+
+    private boolean isUniverseListUnsupported(String errorMessage) {
+        String text = safeLower(errorMessage);
+        return text.contains("http 404")
+                || text.contains("404")
+                || text.contains("universe file not found");
     }
 
     private void loadUniverseApi(String universeName) {
@@ -9851,10 +9862,10 @@ public final class DPolarisJavaApp {
         ));
         if (primary) {
             button.setBackground(COLOR_ACCENT);
-            button.setForeground(Color.WHITE);
+            button.setForeground(pickTextColorForBackground(COLOR_ACCENT));
         } else {
             button.setBackground(COLOR_CARD_ALT);
-            button.setForeground(COLOR_TEXT);
+            button.setForeground(pickTextColorForBackground(COLOR_CARD_ALT));
         }
     }
 
@@ -10144,8 +10155,24 @@ public final class DPolarisJavaApp {
 
                 PortOwnershipInfo ownership = detectPortOwnership(host, port);
                 if (ownership.listening() && ownership.pid() != null) {
-                    clearExternalBackendAttachment();
-                    return BackendStartResult.portConflict(ownership);
+                    if (isManagedVenvBackendOwner(ownership.commandLine())) {
+                        appendBackendLog(ts() + " | [SYSTEM] Port " + port + " is held by managed backend PID "
+                                + ownership.pid() + "; stopping owner before start.");
+                        boolean stopped = stopProcessGracefullyThenForce(ownership.pid(), 3500);
+                        if (!stopped) {
+                            throw new IOException("Failed to stop managed backend PID " + ownership.pid()
+                                    + " before start.");
+                        }
+                        boolean cleared = waitForPortToClear(host, port, 7000);
+                        if (!cleared) {
+                            PortOwnershipInfo currentOwner = detectPortOwnership(host, port);
+                            throw new IOException("Port " + port + " did not clear after stopping managed owner. "
+                                    + "Current owner PID=" + firstNonBlank(currentOwner.pidOrUnknown(), "unknown"));
+                        }
+                    } else {
+                        clearExternalBackendAttachment();
+                        return BackendStartResult.portConflict(ownership);
+                    }
                 }
 
                 clearExternalBackendAttachment();
@@ -10154,6 +10181,11 @@ public final class DPolarisJavaApp {
                 if (!healthy) {
                     backendController.stop();
                     throw new IOException("Backend failed to become healthy within 20 seconds.");
+                }
+                if (!waitForHealthyStability(host, port, 2500)) {
+                    String error = firstNonBlank(backendController.getLastError(), "backend exited after startup");
+                    backendController.stop();
+                    throw new IOException("Backend became unhealthy shortly after start: " + error);
                 }
                 return BackendStartResult.started();
             }
@@ -10178,11 +10210,9 @@ public final class DPolarisJavaApp {
                             appendBackendLog(ts() + " | [WARN] Owner command: " + truncateForDetail(result.portOwnerCommand()));
                         }
                         styleStatusLabel(connectionLabel, "Port conflict on " + host + ":" + port, COLOR_WARNING);
-                        JOptionPane.showMessageDialog(
-                                frame,
-                                warning + "\nUse Reset & Restart (Clean) to recover safely.",
-                                "Backend Port In Use",
-                                JOptionPane.WARNING_MESSAGE
+                        showUnknownPortOwnerDialog(
+                                new PortOwnershipInfo(true, result.portOwnerPid(), result.portOwnerCommand(), "port conflict"),
+                                port
                         );
                     } else {
                         appendBackendLog(ts() + " | [SYSTEM] Backend is healthy.");
@@ -10283,11 +10313,33 @@ public final class DPolarisJavaApp {
                     attachExternalBackend(ownership.pid() == null ? null : ownership);
                     throw new IOException("Backend is external; restart it manually.");
                 }
-                backendController.restart();
+                backendController.stop();
+                if (!waitForPortToClear(host, port, 7000)) {
+                    PortOwnershipInfo owner = detectPortOwnership(host, port);
+                    if (owner.pid() != null && isManagedVenvBackendOwner(owner.commandLine())) {
+                        appendBackendLog(ts() + " | [SYSTEM] Restart: forcing managed owner PID "
+                                + owner.pid() + " to release port " + port + ".");
+                        if (!stopProcessGracefullyThenForce(owner.pid(), 2500)) {
+                            throw new IOException("Failed to terminate managed backend PID " + owner.pid() + ".");
+                        }
+                        if (!waitForPortToClear(host, port, 5000)) {
+                            throw new IOException("Port " + port + " remained in use after managed termination.");
+                        }
+                    } else if (owner.pid() != null) {
+                        throw new IOException("Port " + port + " is owned by unknown PID " + owner.pid()
+                                + "; restart refused.");
+                    }
+                }
+                backendController.start();
                 boolean healthy = backendController.waitUntilHealthy(Duration.ofSeconds(20), Duration.ofMillis(500));
                 if (!healthy) {
                     backendController.stop();
                     throw new IOException("Backend failed to become healthy within 20 seconds.");
+                }
+                if (!waitForHealthyStability(host, port, 2500)) {
+                    String error = firstNonBlank(backendController.getLastError(), "backend exited after restart");
+                    backendController.stop();
+                    throw new IOException("Backend became unhealthy shortly after restart: " + error);
                 }
                 return null;
             }
@@ -10353,6 +10405,7 @@ public final class DPolarisJavaApp {
 
                     appendBackendLog(ts() + " | [SYSTEM] [3/7] Stopping managed backend process.");
                     backendController.stop();
+                    waitForPortToClear(host, port, 7000);
                     clearExternalBackendAttachment();
 
                     appendBackendLog(ts() + " | [SYSTEM] [4/7] Clearing stale runtime files.");
@@ -10373,14 +10426,14 @@ public final class DPolarisJavaApp {
                                 + host + ":" + port + " -> PID " + ownership.pid()
                                 + " | cmd: " + truncateForDetail(ownership.commandLine()));
                         boolean managedMatch = managedPid != null && ownership.pid().longValue() == managedPid.longValue();
-                        boolean knownBackendOwner = isLikelyDpolarisBackendOwner(ownership.commandLine());
+                        boolean knownBackendOwner = isManagedVenvBackendOwner(ownership.commandLine());
                         if (managedMatch || knownBackendOwner) {
                             String reason = managedMatch
                                     ? "managed PID match"
-                                    : "owner command line matches dpolaris_ai backend signature";
+                                    : "owner command line matches managed venv backend signature";
                             appendBackendLog(ts() + " | [SYSTEM] Forcing termination of PID "
                                     + ownership.pid() + " (" + reason + ").");
-                            boolean killed = killProcessByPid(ownership.pid());
+                            boolean killed = stopProcessGracefullyThenForce(ownership.pid(), 3000);
                             if (!killed) {
                                 return CleanResetResult.failureResult(
                                         "Failed to terminate backend owner PID " + ownership.pid() + " on port " + port + ".",
@@ -10416,6 +10469,14 @@ public final class DPolarisJavaApp {
                     if (!healthy) {
                         backendController.stop();
                         return CleanResetResult.failureResult("Backend failed to become healthy within 30 seconds.", null);
+                    }
+                    if (!waitForHealthyStability(host, port, 2500)) {
+                        String detail = firstNonBlank(backendController.getLastError(), "backend exited after startup");
+                        backendController.stop();
+                        return CleanResetResult.failureResult(
+                                "Backend became unhealthy shortly after restart: " + detail,
+                                detectPortOwnership(host, port)
+                        );
                     }
 
                     return CleanResetResult.successResult();
@@ -10464,18 +10525,30 @@ public final class DPolarisJavaApp {
         worker.execute();
     }
 
-    private boolean isLikelyDpolarisBackendOwner(String commandLine) {
+    private boolean isManagedVenvBackendOwner(String commandLine) {
         String cmd = safeLower(commandLine).replace('"', ' ').replace('/', '\\');
         if (cmd.isBlank()) {
             return false;
         }
-        if (cmd.contains("dpolaris_ai")) {
-            return true;
+        return cmd.contains("\\dpolaris_ai\\.venv\\scripts\\python.exe")
+                && cmd.contains("cli.main")
+                && cmd.contains("server");
+    }
+
+    private boolean waitForHealthyStability(String host, int port, int holdMs) {
+        long deadline = System.currentTimeMillis() + Math.max(500, holdMs);
+        while (System.currentTimeMillis() < deadline) {
+            if (!quickHealthCheck(host, port, 900)) {
+                return false;
+            }
+            try {
+                Thread.sleep(250);
+            } catch (InterruptedException interrupted) {
+                Thread.currentThread().interrupt();
+                return false;
+            }
         }
-        if (cmd.contains("cli.main server")) {
-            return true;
-        }
-        return cmd.contains("\\.venv\\scripts\\python.exe -m cli.main server");
+        return true;
     }
 
     private boolean waitForPortToClear(String host, int port, int timeoutMs) {
@@ -13445,11 +13518,37 @@ public final class DPolarisJavaApp {
             return;
         }
         button.setBackground(disabledBackground);
-        button.setForeground(CONTROL_TEXT_DISABLED);
+        button.setForeground(pickTextColorForBackground(disabledBackground));
         button.setBorder(new CompoundBorder(
                 new LineBorder(disabledBorder, 1, true),
                 new EmptyBorder(7, 12, 7, 12)
         ));
+    }
+
+    private boolean stopProcessGracefullyThenForce(int pid, int graceTimeoutMs) {
+        if (pid <= 0) {
+            return false;
+        }
+        ProcessHandle handle = ProcessHandle.of(pid).orElse(null);
+        if (handle != null && handle.isAlive()) {
+            appendBackendLog(ts() + " | [SYSTEM] Attempting graceful stop for PID " + pid + ".");
+            handle.destroy();
+            long deadline = System.currentTimeMillis() + Math.max(750, graceTimeoutMs);
+            while (System.currentTimeMillis() < deadline) {
+                if (!handle.isAlive()) {
+                    appendBackendLog(ts() + " | [SYSTEM] PID " + pid + " exited gracefully.");
+                    return true;
+                }
+                try {
+                    Thread.sleep(150);
+                } catch (InterruptedException interrupted) {
+                    Thread.currentThread().interrupt();
+                    break;
+                }
+            }
+            appendBackendLog(ts() + " | [SYSTEM] Graceful stop timed out for PID " + pid + "; forcing.");
+        }
+        return killProcessByPid(pid);
     }
 
     private void applyPrimaryButton(JButton button) {
