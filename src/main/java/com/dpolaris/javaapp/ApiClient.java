@@ -90,6 +90,54 @@ final class ApiClient {
         );
     }
 
+    Object fetchUniverseList() throws IOException, InterruptedException {
+        return requestWithFallback(
+                "GET",
+                List.of(
+                        "/api/universe/list",
+                        "/universe/list",
+                        "/api/universes",
+                        "/universes"
+                ),
+                null,
+                30
+        );
+    }
+
+    Object fetchUniverseByName(String universeName) throws IOException, InterruptedException {
+        return requestWithFallback(
+                "GET",
+                List.of(
+                        "/api/universe/" + encode(universeName),
+                        "/universe/" + encode(universeName),
+                        "/api/universe?name=" + encode(universeName),
+                        "/universe?name=" + encode(universeName)
+                ),
+                null,
+                45
+        );
+    }
+
+    Map<String, Object> fetchOrchestratorStatus() throws IOException, InterruptedException {
+        Object response = requestWithFallback(
+                "GET",
+                List.of(
+                        "/api/orchestrator/status",
+                        "/orchestrator/status",
+                        "/api/scheduler/status",
+                        "/scheduler/status"
+                ),
+                null,
+                20
+        );
+        if (response instanceof Map<?, ?> mapRaw) {
+            return Json.asObject(mapRaw);
+        }
+        Map<String, Object> wrapped = new LinkedHashMap<>();
+        wrapped.put("status", String.valueOf(response));
+        return wrapped;
+    }
+
     Map<String, Object> startScan(Map<String, Object> payload) throws IOException, InterruptedException {
         String body = Json.compact(payload == null ? new LinkedHashMap<String, Object>() : payload);
         Object response = requestWithFallback(
