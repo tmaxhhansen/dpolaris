@@ -10099,17 +10099,13 @@ public final class DPolarisJavaApp {
         button.setContentAreaFilled(true);
         button.setBorderPainted(true);
         button.setRolloverEnabled(false);
+        Color bg = primary ? COLOR_ACCENT : COLOR_CARD_ALT;
         button.setBorder(new CompoundBorder(
                 new LineBorder(primary ? COLOR_ACCENT : COLOR_BORDER, 1, true),
                 new EmptyBorder(6, 12, 6, 12)
         ));
-        if (primary) {
-            button.setBackground(COLOR_ACCENT);
-            button.setForeground(Color.WHITE);
-        } else {
-            button.setBackground(COLOR_CARD_ALT);
-            button.setForeground(COLOR_TEXT);
-        }
+        button.setBackground(bg);
+        button.setForeground(pickTextColorForBackground(bg));
     }
 
     private void styleNavButton(JButton button) {
@@ -10134,19 +10130,30 @@ public final class DPolarisJavaApp {
         }
         if (active) {
             button.setBackground(COLOR_MENU_ACTIVE);
-            button.setForeground(Color.WHITE);
+            button.setForeground(pickTextColorForBackground(COLOR_MENU_ACTIVE));
             button.setBorder(new CompoundBorder(
                     new LineBorder(COLOR_ACCENT, 1, true),
                     new EmptyBorder(10, 12, 10, 12)
             ));
         } else {
             button.setBackground(COLOR_CARD_ALT);
-            button.setForeground(COLOR_TEXT);
+            button.setForeground(pickTextColorForBackground(COLOR_CARD_ALT));
             button.setBorder(new CompoundBorder(
                     new LineBorder(COLOR_BORDER, 1, true),
                     new EmptyBorder(10, 12, 10, 12)
             ));
         }
+    }
+
+    private Color pickTextColorForBackground(Color background) {
+        if (background == null) {
+            return COLOR_TEXT;
+        }
+        double r = background.getRed() / 255.0;
+        double g = background.getGreen() / 255.0;
+        double b = background.getBlue() / 255.0;
+        double luminance = 0.2126 * r + 0.7152 * g + 0.0722 * b;
+        return luminance < 0.56 ? Color.WHITE : new Color(22, 25, 32);
     }
 
     private void styleStatusLabel(JLabel label, String text, Color accentColor) {
@@ -10390,8 +10397,24 @@ public final class DPolarisJavaApp {
 
                 PortOwnershipInfo ownership = detectPortOwnership(host, port);
                 if (ownership.listening() && ownership.pid() != null) {
-                    clearExternalBackendAttachment();
-                    return BackendStartResult.portConflict(ownership);
+                    if (isSafeWindowsBackendOwner(ownership.commandLine())) {
+                        appendBackendLog(ts() + " | [SYSTEM] Port " + port + " owned by recognized backend PID "
+                                + ownership.pid() + "; terminating stale process.");
+                        boolean killed = killProcessByPid(ownership.pid());
+                        if (killed && waitForPortToClear(host, port, 3000)) {
+                            appendBackendLog(ts() + " | [SYSTEM] Port " + port + " cleared; continuing backend start.");
+                        } else {
+                            appendBackendLog(ts() + " | [WARN] Could not clear PID " + ownership.pid()
+                                    + " from port " + port + ".");
+                            clearExternalBackendAttachment();
+                            return BackendStartResult.portConflict(ownership);
+                        }
+                    } else {
+                        appendBackendLog(ts() + " | [WARN] Port " + port + " is occupied by unknown process PID "
+                                + ownership.pid() + " | " + truncateForDetail(ownership.commandLine()));
+                        clearExternalBackendAttachment();
+                        return BackendStartResult.portConflict(ownership);
+                    }
                 }
 
                 clearExternalBackendAttachment();
@@ -10418,26 +10441,39 @@ public final class DPolarisJavaApp {
                         }
                         styleStatusLabel(connectionLabel, "Backend already running", COLOR_SUCCESS);
                     } else if (result.blockedByPort()) {
-                        String warning = "Port is in use by PID " + result.portOwnerPid()
-                                + "; /health failed. Cannot start backend.";
+                        boolean knownOwner = isSafeWindowsBackendOwner(result.portOwnerCommand());
+                        String warning = knownOwner
+                                ? "Port is in use by PID " + result.portOwnerPid()
+                                + "; backend restart is blocked. Use Reset & Restart (Clean)."
+                                : "Port 8420 is in use by an unknown process (PID " + result.portOwnerPid()
+                                + "). Stop it manually or change port.";
                         appendBackendLog(ts() + " | [WARN] " + warning);
                         if (!result.portOwnerCommand().isBlank()) {
                             appendBackendLog(ts() + " | [WARN] Port owner command: "
                                     + truncateForDetail(result.portOwnerCommand()));
                         }
                         styleStatusLabel(connectionLabel, "Port conflict on " + host + ":" + port, COLOR_WARNING);
-                        Object[] options = {"Run Reset & Restart (Clean)", "Close"};
-                        int choice = JOptionPane.showOptionDialog(
-                                frame,
-                                warning + "\n\nUse Reset & Restart (Clean) to recover safely.",
-                                "Backend Start Blocked",
-                                JOptionPane.DEFAULT_OPTION,
-                                JOptionPane.WARNING_MESSAGE,
-                                null,
-                                options,
-                                options[0]
-                        );
-                        runCleanReset = choice == 0;
+                        if (knownOwner) {
+                            Object[] options = {"Run Reset & Restart (Clean)", "Close"};
+                            int choice = JOptionPane.showOptionDialog(
+                                    frame,
+                                    warning + "\n\nUse Reset & Restart (Clean) to recover safely.",
+                                    "Backend Start Blocked",
+                                    JOptionPane.DEFAULT_OPTION,
+                                    JOptionPane.WARNING_MESSAGE,
+                                    null,
+                                    options,
+                                    options[0]
+                            );
+                            runCleanReset = choice == 0;
+                        } else {
+                            JOptionPane.showMessageDialog(
+                                    frame,
+                                    warning,
+                                    "Unknown Port Owner",
+                                    JOptionPane.WARNING_MESSAGE
+                            );
+                        }
                     } else {
                         appendBackendLog(ts() + " | [SYSTEM] Backend is healthy.");
                         styleStatusLabel(connectionLabel, "Connected", COLOR_SUCCESS);
@@ -10489,7 +10525,7 @@ public final class DPolarisJavaApp {
                 if (quickHealthCheck(host, port, 900)) {
                     PortOwnershipInfo ownership = detectPortOwnership(host, port);
                     attachExternalBackend(ownership.pid() == null ? null : ownership);
-                    if (ownership.pid() != null && isLikelyDpolarisBackendOwner(ownership.commandLine())) {
+                    if (ownership.pid() != null && isSafeWindowsBackendOwner(ownership.commandLine())) {
                         appendBackendLog(ts() + " | [SYSTEM] External backend detected on " + host + ":" + port
                                 + " PID " + ownership.pid() + " | " + truncateForDetail(ownership.commandLine()));
                         boolean killed = killProcessByPid(ownership.pid());
@@ -10641,7 +10677,7 @@ public final class DPolarisJavaApp {
                                 + host + ":" + port + " -> PID " + ownership.pid()
                                 + " | cmd: " + truncateForDetail(ownership.commandLine()));
                         boolean managedMatch = managedPid != null && ownership.pid().longValue() == managedPid.longValue();
-                        boolean knownBackendOwner = isLikelyDpolarisBackendOwner(ownership.commandLine());
+                        boolean knownBackendOwner = isSafeWindowsBackendOwner(ownership.commandLine());
                         if (managedMatch || knownBackendOwner) {
                             String reason = managedMatch
                                     ? "managed PID match"
@@ -10732,18 +10768,16 @@ public final class DPolarisJavaApp {
         worker.execute();
     }
 
-    private boolean isLikelyDpolarisBackendOwner(String commandLine) {
+    private boolean isSafeWindowsBackendOwner(String commandLine) {
         String cmd = safeLower(commandLine).replace('"', ' ').replace('/', '\\');
         if (cmd.isBlank()) {
             return false;
         }
-        if (cmd.contains("dpolaris_ai")) {
-            return true;
-        }
-        if (cmd.contains("cli.main server")) {
-            return true;
-        }
-        return cmd.contains("\\.venv\\scripts\\python.exe -m cli.main server");
+        boolean hasServerModule = cmd.contains("-m cli.main server");
+        boolean pointsToRepo = cmd.contains("c:\\my-git\\dpolaris_ai")
+                || cmd.contains("\\my-git\\dpolaris_ai\\");
+        boolean venvPython = cmd.contains("\\.venv\\scripts\\python.exe");
+        return hasServerModule && (pointsToRepo || venvPython);
     }
 
     private boolean waitForPortToClear(String host, int port, int timeoutMs) {
@@ -10787,7 +10821,7 @@ public final class DPolarisJavaApp {
         }
         if (isWindows()) {
             CommandExecResult result = runCommand(
-                    List.of("cmd", "/c", "taskkill /PID " + pid + " /F"),
+                    List.of("cmd", "/c", "taskkill /PID " + pid + " /T /F"),
                     8000
             );
             if (result.exitCode() == 0) {
@@ -14142,7 +14176,7 @@ public final class DPolarisJavaApp {
         button.setFocusPainted(false);
         button.setRolloverEnabled(true);
         button.setFont(uiFont.deriveFont(Font.BOLD, 13f));
-        button.setForeground(button.isEnabled() ? Color.WHITE : CONTROL_PANEL_DISABLED_FG);
+        button.setForeground(button.isEnabled() ? pickTextColorForBackground(base) : CONTROL_PANEL_DISABLED_FG);
         button.setBackground(button.isEnabled() ? base : CONTROL_PANEL_DISABLED_BG);
         button.setBorder(new CompoundBorder(
                 new LineBorder(button.isEnabled() ? border : CONTROL_PANEL_DISABLED_BORDER, 1, true),
