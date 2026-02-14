@@ -87,6 +87,7 @@ import javax.swing.WindowConstants;
 import javax.swing.event.DocumentEvent;
 import javax.swing.event.DocumentListener;
 import javax.swing.plaf.basic.BasicArrowButton;
+import javax.swing.plaf.basic.BasicButtonUI;
 import javax.swing.plaf.basic.BasicComboBoxUI;
 import javax.swing.plaf.basic.BasicComboPopup;
 import javax.swing.plaf.basic.BasicTabbedPaneUI;
@@ -13073,6 +13074,7 @@ public final class DPolarisJavaApp {
         if (button == null) {
             return;
         }
+        button.setUI(new BasicButtonUI());
         button.setFont(uiFont.deriveFont(Font.BOLD, 13f));
         button.setOpaque(true);
         button.setContentAreaFilled(true);
