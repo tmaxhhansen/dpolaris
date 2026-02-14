@@ -8090,7 +8090,7 @@ public final class DPolarisJavaApp {
         stylePrimary(startDaemonButton);
         styleDanger(stopDaemonButton);
         styleSecondary(clearBackendLogsButton);
-        styleButton(refreshOrchestratorStatusButton, false);
+        styleNeutralButton(refreshOrchestratorStatusButton);
         styleStatusPill(backendStatusValue, "STOPPED");
         styleStatusPill(daemonStatusValue, "Scheduler: unknown");
         styleStatusPill(orchestratorStatusValue, "Orchestrator: unknown");
@@ -9767,15 +9767,8 @@ public final class DPolarisJavaApp {
     }
 
     private void styleStatusLabel(JLabel label, String text, Color accentColor) {
-        label.setText(text);
-        label.setFont(uiFont.deriveFont(Font.BOLD, 12f));
-        label.setForeground(accentColor);
-        label.setOpaque(true);
-        label.setBackground(COLOR_CARD_ALT);
-        label.setBorder(new CompoundBorder(
-                new LineBorder(COLOR_BORDER, 1, true),
-                new EmptyBorder(4, 10, 4, 10)
-        ));
+        // Keep signature for compatibility, but enforce high-contrast pill styling.
+        styleStatusPill(label, text);
     }
 
     private void styleInlineStatus(JLabel label, String text, Color color) {
@@ -12913,7 +12906,7 @@ public final class DPolarisJavaApp {
         DANGER
     }
 
-    private void styleActionButton(JButton button) {
+    private void applyCommonButtonStyle(JButton button) {
         if (button == null) {
             return;
         }
@@ -12926,8 +12919,17 @@ public final class DPolarisJavaApp {
         button.setPreferredSize(CONTROL_BUTTON_SIZE);
         button.setMinimumSize(CONTROL_BUTTON_SIZE);
         button.setMargin(new Insets(0, 12, 0, 12));
-        button.setBackground(new Color(96, 106, 128));
-        button.setForeground(new Color(249, 251, 255));
+    }
+
+    private void styleActionButton(JButton button) {
+        if (button == null) {
+            return;
+        }
+        applyCommonButtonStyle(button);
+        Color enabledBg = new Color(96, 106, 128);
+        Color disabledBg = new Color(71, 78, 96);
+        button.setBackground(button.isEnabled() ? enabledBg : disabledBg);
+        button.setForeground(button.isEnabled() ? new Color(249, 251, 255) : CONTROL_TEXT_DISABLED);
         button.setBorder(new CompoundBorder(
                 new LineBorder(new Color(160, 171, 197), 1, true),
                 new EmptyBorder(7, 12, 7, 12)
@@ -12940,6 +12942,10 @@ public final class DPolarisJavaApp {
 
     private void styleDangerButton(JButton button) {
         styleControlButton(button, ButtonTone.DANGER);
+    }
+
+    private void styleNeutralButton(JButton button) {
+        styleControlButton(button, ButtonTone.SECONDARY);
     }
 
     private void styleStatusPill(JComponent component, String state) {
@@ -12964,7 +12970,7 @@ public final class DPolarisJavaApp {
         if (token.contains("run") || token.contains("healthy") || token.contains("connect")) {
             return new Color(46, 135, 83);
         }
-        if (token.contains("error") || token.contains("fail")) {
+        if (token.contains("error") || token.contains("fail") || token.contains("stop")) {
             return new Color(173, 64, 69);
         }
         return new Color(176, 123, 34);
@@ -12975,7 +12981,7 @@ public final class DPolarisJavaApp {
         if (token.contains("run") || token.contains("healthy") || token.contains("connect")) {
             return new Color(88, 178, 124);
         }
-        if (token.contains("error") || token.contains("fail")) {
+        if (token.contains("error") || token.contains("fail") || token.contains("stop")) {
             return new Color(214, 112, 117);
         }
         return new Color(226, 173, 80);
@@ -12986,7 +12992,7 @@ public final class DPolarisJavaApp {
     }
 
     private void styleSecondary(JButton button) {
-        styleControlButton(button, ButtonTone.SECONDARY);
+        styleNeutralButton(button);
     }
 
     private void styleDanger(JButton button) {
@@ -13027,18 +13033,18 @@ public final class DPolarisJavaApp {
             }
         }
 
-        button.setFont(uiFont.deriveFont(Font.BOLD, 13f));
-        button.setOpaque(true);
-        button.setContentAreaFilled(true);
-        button.setBorderPainted(false);
-        button.setFocusPainted(false);
-        button.setRolloverEnabled(false);
-        button.setPreferredSize(CONTROL_BUTTON_SIZE);
-        button.setMinimumSize(CONTROL_BUTTON_SIZE);
-        button.setMargin(new Insets(0, 12, 0, 12));
+        applyCommonButtonStyle(button);
         button.setForeground(button.isEnabled() ? CONTROL_TEXT_ENABLED : CONTROL_TEXT_DISABLED);
         button.setBackground(button.isEnabled() ? enabledBg : disabledBg);
-        button.setBorder(new EmptyBorder(8, 12, 8, 12));
+        Color borderColor = switch (tone) {
+            case PRIMARY -> new Color(144, 189, 255);
+            case DANGER -> new Color(226, 127, 136);
+            default -> new Color(160, 171, 197);
+        };
+        button.setBorder(new CompoundBorder(
+                new LineBorder(borderColor, 1, true),
+                new EmptyBorder(7, 12, 7, 12)
+        ));
     }
 
     private static String ts() {
