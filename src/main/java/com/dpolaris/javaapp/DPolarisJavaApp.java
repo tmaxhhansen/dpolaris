@@ -392,15 +392,21 @@ public final class DPolarisJavaApp {
     private JLabel orchestratorStatusValue;
     private JButton doctorRunButton;
     private JButton doctorCopyReportButton;
+    private JButton doctorCopyFixCommandsButton;
+    private JButton doctorRestartBackendButton;
+    private JButton doctorRefreshOrchestratorButton;
     private JLabel doctorSummaryStatusLabel;
     private JLabel doctorHealthStatusLabel;
     private JLabel doctorBackendStatusLabel;
     private JLabel doctorOrchestratorStatusLabel;
     private JLabel doctorUniverseStatusLabel;
+    private JLabel doctorOwnershipStatusLabel;
     private JLabel doctorPortStatusLabel;
     private JTextArea doctorReportArea;
+    private JTextArea doctorOrchestratorDetailsArea;
     private volatile SwingWorker<DoctorReport, Void> activeDoctorWorker;
     private volatile String doctorLastReportText = "Doctor report has not been run yet.";
+    private volatile String doctorLastFixCommands = "";
 
     private volatile SwingWorker<Void, String> activeTrainingWorker;
     private volatile boolean backendActionInFlight;
@@ -8334,26 +8340,37 @@ public final class DPolarisJavaApp {
 
         doctorRunButton = new JButton("Run Doctor");
         doctorCopyReportButton = new JButton("Copy Report");
+        doctorCopyFixCommandsButton = new JButton("Copy Fix Commands (PowerShell)");
+        doctorRestartBackendButton = new JButton("Restart Backend");
+        doctorRefreshOrchestratorButton = new JButton("Refresh Orchestrator Status");
         doctorSummaryStatusLabel = new JLabel();
         doctorHealthStatusLabel = new JLabel();
         doctorBackendStatusLabel = new JLabel();
         doctorOrchestratorStatusLabel = new JLabel();
         doctorUniverseStatusLabel = new JLabel();
+        doctorOwnershipStatusLabel = new JLabel();
         doctorPortStatusLabel = new JLabel();
 
         styleButton(doctorRunButton, true);
         styleButton(doctorCopyReportButton, false);
+        styleButton(doctorCopyFixCommandsButton, false);
+        styleButton(doctorRestartBackendButton, false);
+        styleButton(doctorRefreshOrchestratorButton, false);
         styleInlineStatus(doctorSummaryStatusLabel, "Doctor: idle", COLOR_MUTED);
         styleInlineStatus(doctorHealthStatusLabel, "1) Backend health: pending", COLOR_MUTED);
         styleInlineStatus(doctorBackendStatusLabel, "2) Backend status: pending", COLOR_MUTED);
         styleInlineStatus(doctorOrchestratorStatusLabel, "3) Orchestrator status: pending", COLOR_MUTED);
         styleInlineStatus(doctorUniverseStatusLabel, "4) Universe endpoints: pending", COLOR_MUTED);
-        styleInlineStatus(doctorPortStatusLabel, "5) Port check: pending", COLOR_MUTED);
+        styleInlineStatus(doctorOwnershipStatusLabel, "5) Backend ownership/env: pending", COLOR_MUTED);
+        styleInlineStatus(doctorPortStatusLabel, "6) Port check: pending", COLOR_MUTED);
 
         JPanel actionRow = new JPanel(new FlowLayout(FlowLayout.LEFT, 8, 0));
         actionRow.setOpaque(false);
         actionRow.add(doctorRunButton);
+        actionRow.add(doctorRefreshOrchestratorButton);
+        actionRow.add(doctorRestartBackendButton);
         actionRow.add(doctorCopyReportButton);
+        actionRow.add(doctorCopyFixCommandsButton);
         actionRow.add(doctorSummaryStatusLabel);
 
         JPanel checklist = new JPanel();
@@ -8367,6 +8384,8 @@ public final class DPolarisJavaApp {
         checklist.add(Box.createVerticalStrut(6));
         checklist.add(doctorUniverseStatusLabel);
         checklist.add(Box.createVerticalStrut(6));
+        checklist.add(doctorOwnershipStatusLabel);
+        checklist.add(Box.createVerticalStrut(6));
         checklist.add(doctorPortStatusLabel);
 
         JPanel topCard = createCardPanel();
@@ -8375,6 +8394,17 @@ public final class DPolarisJavaApp {
         topBody.setOpaque(false);
         topBody.add(actionRow, BorderLayout.NORTH);
         topBody.add(checklist, BorderLayout.CENTER);
+        doctorOrchestratorDetailsArea = createLogArea();
+        doctorOrchestratorDetailsArea.setLineWrap(true);
+        doctorOrchestratorDetailsArea.setWrapStyleWord(true);
+        doctorOrchestratorDetailsArea.setRows(5);
+        doctorOrchestratorDetailsArea.setText("Orchestrator status details will appear here.");
+        JScrollPane orchestratorDetailsScroll = createLogScrollPane(
+                doctorOrchestratorDetailsArea,
+                "Orchestrator Status Fields"
+        );
+        orchestratorDetailsScroll.setPreferredSize(new Dimension(10, 160));
+        topBody.add(orchestratorDetailsScroll, BorderLayout.SOUTH);
         topCard.add(topBody, BorderLayout.CENTER);
 
         doctorReportArea = createLogArea();
@@ -8385,6 +8415,9 @@ public final class DPolarisJavaApp {
 
         doctorRunButton.addActionListener(e -> runDoctorChecks());
         doctorCopyReportButton.addActionListener(e -> copyDoctorReportToClipboard());
+        doctorCopyFixCommandsButton.addActionListener(e -> copyDoctorFixCommandsToClipboard());
+        doctorRefreshOrchestratorButton.addActionListener(e -> refreshDoctorOrchestratorStatus());
+        doctorRestartBackendButton.addActionListener(e -> restartBackendViaDoctor());
 
         root.add(topCard, BorderLayout.NORTH);
         root.add(reportScroll, BorderLayout.CENTER);
@@ -8405,7 +8438,8 @@ public final class DPolarisJavaApp {
         styleInlineStatus(doctorBackendStatusLabel, "2) Backend status: waiting...", COLOR_MUTED);
         styleInlineStatus(doctorOrchestratorStatusLabel, "3) Orchestrator status: waiting...", COLOR_MUTED);
         styleInlineStatus(doctorUniverseStatusLabel, "4) Universe endpoints: waiting...", COLOR_MUTED);
-        styleInlineStatus(doctorPortStatusLabel, "5) Port check: waiting...", COLOR_MUTED);
+        styleInlineStatus(doctorOwnershipStatusLabel, "5) Backend ownership/env: waiting...", COLOR_MUTED);
+        styleInlineStatus(doctorPortStatusLabel, "6) Port check: waiting...", COLOR_MUTED);
         if (doctorReportArea != null) {
             doctorReportArea.setText(ts() + " | Running Doctor diagnostics...\n");
         }
@@ -8431,15 +8465,21 @@ public final class DPolarisJavaApp {
                 try {
                     DoctorReport report = get();
                     doctorLastReportText = report.reportText();
+                    doctorLastFixCommands = report.fixCommands();
                     if (doctorReportArea != null) {
                         doctorReportArea.setText(report.reportText());
                         doctorReportArea.setCaretPosition(0);
+                    }
+                    if (doctorOrchestratorDetailsArea != null) {
+                        doctorOrchestratorDetailsArea.setText(report.orchestratorDetails());
+                        doctorOrchestratorDetailsArea.setCaretPosition(0);
                     }
                     updateDoctorCheckLabel(doctorHealthStatusLabel, "1) Backend health", report.health());
                     updateDoctorCheckLabel(doctorBackendStatusLabel, "2) Backend status", report.backendStatus());
                     updateDoctorCheckLabel(doctorOrchestratorStatusLabel, "3) Orchestrator status", report.orchestratorStatus());
                     updateDoctorCheckLabel(doctorUniverseStatusLabel, "4) Universe endpoints", report.universeStatus());
-                    updateDoctorCheckLabel(doctorPortStatusLabel, "5) Port check", report.portCheck());
+                    updateDoctorCheckLabel(doctorOwnershipStatusLabel, "5) Backend ownership/env", report.ownershipCheck());
+                    updateDoctorCheckLabel(doctorPortStatusLabel, "6) Port check", report.portCheck());
 
                     int failCount = report.failCount();
                     int warnCount = report.warnCount();
@@ -8453,6 +8493,9 @@ public final class DPolarisJavaApp {
                     styleInlineStatus(doctorSummaryStatusLabel, "Doctor: failed", COLOR_DANGER);
                     if (doctorReportArea != null) {
                         doctorReportArea.setText(ts() + " | Doctor failed: " + humanizeError(ex));
+                    }
+                    if (doctorOrchestratorDetailsArea != null) {
+                        doctorOrchestratorDetailsArea.setText("Orchestrator status details unavailable.");
                     }
                 }
             }
@@ -8477,8 +8520,14 @@ public final class DPolarisJavaApp {
         DoctorCheckResult universeCheck = evaluateUniverseCheck(host, port);
         checks.add(universeCheck);
 
-        DoctorCheckResult portCheck = evaluatePortCheck(host, port, healthCheck.state());
+        PortOwnershipInfo ownership = detectPortOwnership(host, port);
+        DoctorCheckResult ownershipCheck = evaluateOwnershipCheck(ownership);
+        checks.add(ownershipCheck);
+
+        DoctorCheckResult portCheck = evaluatePortCheck(host, port, healthCheck.state(), ownership);
         checks.add(portCheck);
+
+        OrchestratorProbe orchestratorProbe = probeOrchestrator(host, port);
 
         int pass = 0;
         int warn = 0;
@@ -8493,17 +8542,21 @@ public final class DPolarisJavaApp {
             }
         }
 
-        String reportText = formatDoctorReport(host, port, checks, pass, warn, fail);
+        String fixCommands = buildDoctorFixCommands(host, port, ownership, orchestratorProbe);
+        String reportText = formatDoctorReport(host, port, checks, pass, warn, fail, ownership, orchestratorProbe);
         return new DoctorReport(
                 checks.get(0),
                 checks.get(1),
                 checks.get(2),
                 checks.get(3),
                 checks.get(4),
+                checks.get(5),
                 pass,
                 warn,
                 fail,
-                reportText
+                reportText,
+                fixCommands,
+                formatOrchestratorDetails(orchestratorProbe)
         );
     }
 
@@ -8556,39 +8609,32 @@ public final class DPolarisJavaApp {
     }
 
     private DoctorCheckResult evaluateOrchestratorCheck(String host, int port) {
-        DoctorHttpResult primary = doctorGet(host, port, "/api/orchestrator/status", 12);
-        if (primary.ok()) {
-            String state = summarizeRunningState(primary.parsedBody());
-            return new DoctorCheckResult(
-                    DoctorState.PASS,
-                    "PASS | /api/orchestrator/status | " + state,
-                    "HTTP " + primary.statusCode() + " in " + primary.elapsedMs() + " ms"
-            );
-        }
-
-        if (primary.statusCode() == 404) {
-            DoctorHttpResult fallback = doctorGet(host, port, "/api/scheduler/status", 12);
-            if (fallback.ok()) {
-                String state = summarizeRunningState(fallback.parsedBody());
-                DoctorState checkState = safeLower(state).contains("run") ? DoctorState.PASS : DoctorState.WARN;
-                return new DoctorCheckResult(
-                        checkState,
-                        (checkState == DoctorState.PASS ? "PASS" : "WARN")
-                                + " | fallback /api/scheduler/status | " + state,
-                        "Primary 404, fallback HTTP " + fallback.statusCode()
-                );
-            }
+        OrchestratorProbe probe = probeOrchestrator(host, port);
+        if (probe.payload() == null) {
             return new DoctorCheckResult(
                     DoctorState.FAIL,
-                    "FAIL | primary 404, fallback failed",
-                    "Fallback /api/scheduler/status failed: " + fallback.errorSummary()
+                    "FAIL | " + probe.errorSummary(),
+                    "Orchestrator status unavailable"
             );
         }
-
+        if (probe.legacyFallback()) {
+            return new DoctorCheckResult(
+                    DoctorState.WARN,
+                    "WARN | Legacy backend: orchestrator API not available",
+                    "Fallback /api/scheduler/status used; status=" + probe.stateText()
+            );
+        }
+        if (probe.running()) {
+            return new DoctorCheckResult(
+                    DoctorState.PASS,
+                    "PASS | running=true",
+                    "uptime_seconds=" + probe.uptimeSeconds()
+            );
+        }
         return new DoctorCheckResult(
-                DoctorState.FAIL,
-                "FAIL | " + primary.errorSummary(),
-                "GET /api/orchestrator/status failed: " + primary.errorSummary()
+                DoctorState.WARN,
+                "WARN | running=false",
+                "Backend is running but orchestrator is not active (or not detectable)."
         );
     }
 
@@ -8633,7 +8679,48 @@ public final class DPolarisJavaApp {
         );
     }
 
-    private DoctorCheckResult evaluatePortCheck(String host, int port, DoctorState healthState) {
+    private DoctorCheckResult evaluateOwnershipCheck(PortOwnershipInfo info) {
+        if (!isWindows()) {
+            return new DoctorCheckResult(
+                    DoctorState.WARN,
+                    "WARN | non-Windows host, ownership check skipped",
+                    "Windows-first diagnostic"
+            );
+        }
+        if (!info.listening()) {
+            return new DoctorCheckResult(
+                    DoctorState.FAIL,
+                    "FAIL | port not listening",
+                    firstNonBlank(info.detail(), "Port owner not detected")
+            );
+        }
+        String command = safeLower(info.commandLine());
+        boolean venv = command.contains("\\.venv\\scripts\\python.exe");
+        boolean systemPython = command.contains("python311")
+                || (command.contains("\\python.exe") && !venv)
+                || command.contains("windowsapps\\python");
+        if (venv) {
+            return new DoctorCheckResult(
+                    DoctorState.PASS,
+                    "PASS | pid=" + info.pid() + " | venv python",
+                    truncateForDetail(info.commandLine())
+            );
+        }
+        if (systemPython) {
+            return new DoctorCheckResult(
+                    DoctorState.FAIL,
+                    "FAIL | pid=" + info.pid() + " | system Python detected",
+                    "Backend is running under system Python, orchestrator self-healing may fail"
+            );
+        }
+        return new DoctorCheckResult(
+                DoctorState.WARN,
+                "WARN | pid=" + info.pid() + " | python env unclear",
+                truncateForDetail(info.commandLine())
+        );
+    }
+
+    private DoctorCheckResult evaluatePortCheck(String host, int port, DoctorState healthState, PortOwnershipInfo info) {
         if (healthState == DoctorState.PASS) {
             return new DoctorCheckResult(
                     DoctorState.WARN,
@@ -8649,14 +8736,16 @@ public final class DPolarisJavaApp {
             return new DoctorCheckResult(
                     DoctorState.PASS,
                     "PASS | reachable | " + elapsed + " ms",
-                    "TCP connect succeeded to " + host + ":" + port
+                    "TCP connect succeeded to " + host + ":" + port + " (pid=" + info.pidOrUnknown() + ")"
             );
         } catch (IOException ex) {
             long elapsed = Duration.ofNanos(System.nanoTime() - started).toMillis();
             return new DoctorCheckResult(
                     DoctorState.FAIL,
                     "FAIL | unreachable | " + elapsed + " ms",
-                    "TCP connect failed: " + ex.getMessage()
+                    "Port 8420 not responding"
+                            + (info.pid() != null ? " | owner pid=" + info.pid() : "")
+                            + " | " + ex.getMessage()
             );
         }
     }
@@ -8737,6 +8826,179 @@ public final class DPolarisJavaApp {
         return firstNonBlank(stateText, "unknown");
     }
 
+    private String truncateForDetail(String value) {
+        String text = stringOrEmpty(value);
+        if (text.length() <= 220) {
+            return text;
+        }
+        return text.substring(0, 217) + "...";
+    }
+
+    private PortOwnershipInfo detectPortOwnership(String host, int port) {
+        if (!isWindows()) {
+            return new PortOwnershipInfo(false, null, "", "non-windows");
+        }
+
+        CommandExecResult netstat = runCommand(List.of("cmd", "/c", "netstat -ano -p tcp"), 5000);
+        if (netstat.exitCode() != 0 && netstat.stdout().isBlank()) {
+            return new PortOwnershipInfo(false, null, "", "netstat failed: " + netstat.stderrOrStdout());
+        }
+
+        Integer pid = null;
+        for (String rawLine : netstat.stdoutLines()) {
+            String line = rawLine == null ? "" : rawLine.trim();
+            if (line.isBlank()) {
+                continue;
+            }
+            String[] parts = line.split("\\s+");
+            if (parts.length < 5 || !"TCP".equalsIgnoreCase(parts[0])) {
+                continue;
+            }
+            Integer localPort = extractPortFromEndpoint(parts[1]);
+            if (localPort == null || localPort != port) {
+                continue;
+            }
+            String state = parts[3];
+            if (!"LISTENING".equalsIgnoreCase(state) && !"LISTEN".equalsIgnoreCase(state)) {
+                continue;
+            }
+            try {
+                pid = Integer.parseInt(parts[4].trim());
+                break;
+            } catch (NumberFormatException ignored) {
+                // Continue scanning
+            }
+        }
+
+        if (pid == null) {
+            return new PortOwnershipInfo(false, null, "", "no LISTENING owner found on " + host + ":" + port);
+        }
+
+        return new PortOwnershipInfo(true, pid, readCommandLineForPid(pid), "owner resolved");
+    }
+
+    private Integer extractPortFromEndpoint(String endpoint) {
+        if (endpoint == null || endpoint.isBlank()) {
+            return null;
+        }
+        String text = endpoint.trim();
+        int idx = text.lastIndexOf(':');
+        if (idx < 0 || idx >= text.length() - 1) {
+            return null;
+        }
+        try {
+            return Integer.parseInt(text.substring(idx + 1));
+        } catch (NumberFormatException ignored) {
+            return null;
+        }
+    }
+
+    private String readCommandLineForPid(int pid) {
+        String psCommand = "$p=Get-CimInstance Win32_Process -Filter \"ProcessId=" + pid
+                + "\"; if ($null -ne $p) { $p.CommandLine }";
+        CommandExecResult ps = runCommand(
+                List.of("powershell", "-NoProfile", "-Command", psCommand),
+                5000
+        );
+        String fromPs = firstNonBlank(ps.firstContentLine(), "");
+        if (!fromPs.isBlank()) {
+            return fromPs;
+        }
+
+        CommandExecResult wmic = runCommand(
+                List.of("cmd", "/c", "wmic process where processid=" + pid + " get CommandLine /value"),
+                5000
+        );
+        for (String line : wmic.stdoutLines()) {
+            String trimmed = line == null ? "" : line.trim();
+            if (trimmed.startsWith("CommandLine=")) {
+                return trimmed.substring("CommandLine=".length()).trim();
+            }
+            if (!trimmed.isBlank() && !safeLower(trimmed).contains("commandline")) {
+                return trimmed;
+            }
+        }
+        return "";
+    }
+
+    private CommandExecResult runCommand(List<String> command, int timeoutMs) {
+        ProcessBuilder pb = new ProcessBuilder(command);
+        pb.redirectErrorStream(true);
+        try {
+            Process process = pb.start();
+            boolean done = process.waitFor(timeoutMs, TimeUnit.MILLISECONDS);
+            if (!done) {
+                process.destroyForcibly();
+                return new CommandExecResult(-1, "", "command timed out", List.of());
+            }
+            List<String> lines = new ArrayList<>();
+            try (BufferedReader reader = new BufferedReader(new InputStreamReader(process.getInputStream(), StandardCharsets.UTF_8))) {
+                String line;
+                while ((line = reader.readLine()) != null) {
+                    lines.add(line);
+                }
+            }
+            String joined = String.join("\n", lines);
+            return new CommandExecResult(process.exitValue(), joined, "", lines);
+        } catch (Exception ex) {
+            return new CommandExecResult(
+                    -1,
+                    "",
+                    ex.getMessage() == null ? ex.getClass().getSimpleName() : ex.getMessage(),
+                    List.of()
+            );
+        }
+    }
+
+    private OrchestratorProbe probeOrchestrator(String host, int port) {
+        DoctorHttpResult primary = doctorGet(host, port, "/api/orchestrator/status", 12);
+        if (primary.ok()) {
+            Map<String, Object> payload = primary.parsedBody() instanceof Map<?, ?> mapRaw
+                    ? Json.asObject(mapRaw)
+                    : new LinkedHashMap<>();
+            return OrchestratorProbe.from(payload, false, primary, null, null);
+        }
+        if (primary.statusCode() == 404) {
+            DoctorHttpResult fallback = doctorGet(host, port, "/api/scheduler/status", 12);
+            if (fallback.ok()) {
+                Map<String, Object> payload = fallback.parsedBody() instanceof Map<?, ?> mapRaw
+                        ? Json.asObject(mapRaw)
+                        : new LinkedHashMap<>();
+                return OrchestratorProbe.from(payload, true, primary, fallback, null);
+            }
+            return OrchestratorProbe.from(null, true, primary, fallback, fallback.errorSummary());
+        }
+        return OrchestratorProbe.from(null, false, primary, null, primary.errorSummary());
+    }
+
+    private String formatOrchestratorDetails(OrchestratorProbe probe) {
+        StringBuilder sb = new StringBuilder();
+        sb.append("source: ").append(probe.legacyFallback() ? "scheduler fallback" : "orchestrator API").append('\n');
+        if (probe.payload() == null) {
+            sb.append("status: unavailable\n");
+            sb.append("error: ").append(firstNonBlank(probe.errorSummary(), "unknown")).append('\n');
+            return sb.toString();
+        }
+        Map<String, Object> payload = probe.payload();
+        sb.append("running: ").append(probe.running()).append('\n');
+        sb.append("uptime_seconds: ").append(firstNonBlank(stringOrEmpty(findAnyValue(payload, "uptime_seconds", "uptimeSeconds")), "n/a")).append('\n');
+        sb.append("last_health_check: ").append(firstNonBlank(stringOrEmpty(findAnyValue(payload, "last_health_check", "lastHealthCheck")), "n/a")).append('\n');
+        sb.append("last_restart: ").append(firstNonBlank(stringOrEmpty(findAnyValue(payload, "last_restart", "lastRestart")), "n/a")).append('\n');
+        sb.append("restart_count_24h: ").append(firstNonBlank(stringOrEmpty(findAnyValue(payload, "restart_count_24h", "restartCount24h")), "n/a")).append('\n');
+        Object backendStateObj = findAnyValue(payload, "backend_state", "backendState");
+        if (backendStateObj instanceof Map<?, ?> stateRaw) {
+            Map<String, Object> state = Json.asObject(stateRaw);
+            sb.append("backend_state.pid: ").append(firstNonBlank(stringOrEmpty(findAnyValue(state, "pid", "process_id")), "n/a")).append('\n');
+            sb.append("backend_state.state: ").append(firstNonBlank(stringOrEmpty(findAnyValue(state, "state", "status")), "n/a")).append('\n');
+        } else {
+            sb.append("backend_state.pid: ").append(firstNonBlank(stringOrEmpty(findAnyValue(payload, "backend_pid", "pid")), "n/a")).append('\n');
+        }
+        if (probe.legacyFallback()) {
+            sb.append('\n').append("WARN: Legacy backend: orchestrator API not available.");
+        }
+        return sb.toString();
+    }
+
     private void updateDoctorCheckLabel(JLabel label, String title, DoctorCheckResult result) {
         if (label == null || result == null) {
             return;
@@ -8755,7 +9017,9 @@ public final class DPolarisJavaApp {
             List<DoctorCheckResult> checks,
             int pass,
             int warn,
-            int fail
+            int fail,
+            PortOwnershipInfo ownership,
+            OrchestratorProbe orchestratorProbe
     ) {
         StringBuilder sb = new StringBuilder();
         sb.append("dPolaris Doctor Report\n");
@@ -8768,6 +9032,23 @@ public final class DPolarisJavaApp {
             DoctorCheckResult check = checks.get(i);
             sb.append(i + 1).append(") ").append(check.summary()).append('\n');
             sb.append("   ").append(check.detail()).append('\n');
+        }
+        sb.append('\n');
+        if (checks.get(0).state() == DoctorState.FAIL) {
+            sb.append("Actionable Diagnosis: Port 8420 not responding.\n");
+            if (ownership.pid() != null) {
+                sb.append("Port owner PID: ").append(ownership.pid()).append('\n');
+                sb.append("CommandLine: ").append(truncateForDetail(ownership.commandLine())).append('\n');
+            } else {
+                sb.append("No listening owner found for port 8420.\n");
+            }
+        }
+        if (checks.get(0).state() == DoctorState.PASS && !orchestratorProbe.running()) {
+            sb.append("Actionable Diagnosis: Backend is running but orchestrator is not active (or not detectable).\n");
+            sb.append("Use 'Copy Fix Commands (PowerShell)' to start orchestrator and re-check.\n");
+        }
+        if (orchestratorProbe.legacyFallback()) {
+            sb.append("Legacy Warning: orchestrator API not available; scheduler fallback used.\n");
         }
         return sb.toString();
     }
@@ -8783,6 +9064,141 @@ public final class DPolarisJavaApp {
         } catch (Exception ex) {
             styleInlineStatus(doctorSummaryStatusLabel, "Doctor: copy failed", COLOR_DANGER);
         }
+    }
+
+    private void copyDoctorFixCommandsToClipboard() {
+        String text = doctorLastFixCommands == null ? "" : doctorLastFixCommands;
+        if (text.isBlank()) {
+            String host = hostField == null ? "127.0.0.1" : firstNonBlank(hostField.getText().trim(), "127.0.0.1");
+            text = buildDoctorFixCommands(host, currentPort(), new PortOwnershipInfo(false, null, "", ""), null);
+            doctorLastFixCommands = text;
+        }
+        try {
+            Toolkit.getDefaultToolkit().getSystemClipboard().setContents(new StringSelection(text), null);
+            styleInlineStatus(doctorSummaryStatusLabel, "Doctor: fix commands copied", COLOR_SUCCESS);
+        } catch (Exception ex) {
+            styleInlineStatus(doctorSummaryStatusLabel, "Doctor: fix command copy failed", COLOR_DANGER);
+        }
+    }
+
+    private String buildDoctorFixCommands(String host, int port, PortOwnershipInfo ownership, OrchestratorProbe probe) {
+        StringBuilder sb = new StringBuilder();
+        sb.append("# dPolaris Windows Doctor fix runbook (copy/paste into PowerShell)\n");
+        sb.append("$host = '").append(host).append("'\n");
+        sb.append("$port = ").append(port).append('\n');
+        sb.append("$repo = 'C:\\my-git\\dpolaris_ai'\n");
+        sb.append("$venvPy = 'C:\\my-git\\dpolaris_ai\\.venv\\Scripts\\python.exe'\n\n");
+        sb.append("# 1) Identify owner of port and stop it carefully\n");
+        sb.append("$pidLine = netstat -ano | Select-String \":$port\\s+.*LISTENING\" | Select-Object -First 1\n");
+        sb.append("if ($pidLine) {\n");
+        sb.append("  $pid = ($pidLine.ToString().Trim() -split '\\s+')[-1]\n");
+        sb.append("  Write-Host \"Found PID on port $port: $pid\"\n");
+        sb.append("  try { Stop-Process -Id $pid -Force -ErrorAction Stop } catch { Write-Host \"Stop-Process failed: $($_.Exception.Message)\" }\n");
+        sb.append("} else {\n");
+        sb.append("  Write-Host \"No LISTENING PID found on port $port\"\n");
+        sb.append("}\n\n");
+        sb.append("# 2) Start orchestrator with venv python\n");
+        sb.append("if (-not (Test-Path $venvPy)) { throw \"Missing venv python: $venvPy\" }\n");
+        sb.append("Start-Process -FilePath $venvPy -ArgumentList '-m','cli.main','orchestrator','--base-url',\"http://$host:$port\" -WorkingDirectory $repo\n\n");
+        sb.append("# 3) Re-check health and orchestrator status\n");
+        sb.append("Start-Sleep -Seconds 4\n");
+        sb.append("Invoke-RestMethod -Uri \"http://$host:$port/health\"\n");
+        sb.append("try {\n");
+        sb.append("  Invoke-RestMethod -Uri \"http://$host:$port/api/orchestrator/status\"\n");
+        sb.append("} catch {\n");
+        sb.append("  Write-Host \"Orchestrator API unavailable, checking scheduler status...\"\n");
+        sb.append("  Invoke-RestMethod -Uri \"http://$host:$port/api/scheduler/status\"\n");
+        sb.append("}\n");
+        if (ownership != null && ownership.pid() != null) {
+            sb.append("\n# Last detected port owner: PID ").append(ownership.pid()).append('\n');
+        }
+        if (probe != null && probe.legacyFallback()) {
+            sb.append("# Legacy backend previously detected (orchestrator API unavailable)\n");
+        }
+        return sb.toString();
+    }
+
+    private void refreshDoctorOrchestratorStatus() {
+        configureClientFromUI();
+        if (doctorRefreshOrchestratorButton != null) {
+            doctorRefreshOrchestratorButton.setEnabled(false);
+        }
+        styleInlineStatus(doctorOrchestratorStatusLabel, "3) Orchestrator status: checking...", COLOR_WARNING);
+        SwingWorker<OrchestratorProbe, Void> worker = new SwingWorker<>() {
+            @Override
+            protected OrchestratorProbe doInBackground() {
+                String host = hostField == null ? "127.0.0.1" : firstNonBlank(hostField.getText().trim(), "127.0.0.1");
+                return probeOrchestrator(host, currentPort());
+            }
+
+            @Override
+            protected void done() {
+                if (doctorRefreshOrchestratorButton != null) {
+                    doctorRefreshOrchestratorButton.setEnabled(true);
+                }
+                try {
+                    OrchestratorProbe probe = get();
+                    if (doctorOrchestratorDetailsArea != null) {
+                        doctorOrchestratorDetailsArea.setText(formatOrchestratorDetails(probe));
+                        doctorOrchestratorDetailsArea.setCaretPosition(0);
+                    }
+                    if (probe.payload() == null) {
+                        styleInlineStatus(doctorOrchestratorStatusLabel, "3) Orchestrator status: FAIL | unavailable", COLOR_DANGER);
+                    } else if (probe.legacyFallback()) {
+                        styleInlineStatus(
+                                doctorOrchestratorStatusLabel,
+                                "3) Orchestrator status: WARN | Legacy backend: orchestrator API not available",
+                                COLOR_WARNING
+                        );
+                    } else if (probe.running()) {
+                        styleInlineStatus(doctorOrchestratorStatusLabel, "3) Orchestrator status: PASS | running=true", COLOR_SUCCESS);
+                    } else {
+                        styleInlineStatus(doctorOrchestratorStatusLabel, "3) Orchestrator status: WARN | running=false", COLOR_WARNING);
+                    }
+                } catch (Exception ex) {
+                    styleInlineStatus(doctorOrchestratorStatusLabel, "3) Orchestrator status: FAIL | check failed", COLOR_DANGER);
+                }
+            }
+        };
+        worker.execute();
+    }
+
+    private void restartBackendViaDoctor() {
+        configureClientFromUI();
+        if (doctorRestartBackendButton != null) {
+            doctorRestartBackendButton.setEnabled(false);
+        }
+        SwingWorker<Map<String, Object>, Void> worker = new SwingWorker<>() {
+            @Override
+            protected Map<String, Object> doInBackground() throws Exception {
+                return apiClient.restartBackendViaOrchestrator();
+            }
+
+            @Override
+            protected void done() {
+                if (doctorRestartBackendButton != null) {
+                    doctorRestartBackendButton.setEnabled(true);
+                }
+                try {
+                    Map<String, Object> payload = get();
+                    JOptionPane.showMessageDialog(
+                            frame,
+                            "Orchestrator restart request sent.\n\n" + Json.pretty(payload),
+                            "Restart Backend",
+                            JOptionPane.INFORMATION_MESSAGE
+                    );
+                    refreshDoctorOrchestratorStatus();
+                } catch (Exception ex) {
+                    JOptionPane.showMessageDialog(
+                            frame,
+                            "Restart backend request failed:\n" + humanizeError(ex),
+                            "Restart Backend Failed",
+                            JOptionPane.ERROR_MESSAGE
+                    );
+                }
+            }
+        };
+        worker.execute();
     }
 
     private enum DoctorState {
@@ -8803,11 +9219,14 @@ public final class DPolarisJavaApp {
             DoctorCheckResult backendStatus,
             DoctorCheckResult orchestratorStatus,
             DoctorCheckResult universeStatus,
+            DoctorCheckResult ownershipCheck,
             DoctorCheckResult portCheck,
             int passCount,
             int warnCount,
             int failCount,
-            String reportText
+            String reportText,
+            String fixCommands,
+            String orchestratorDetails
     ) {
     }
 
@@ -8831,6 +9250,105 @@ public final class DPolarisJavaApp {
                 return error.getClass().getSimpleName();
             }
             return message;
+        }
+    }
+
+    private record PortOwnershipInfo(
+            boolean listening,
+            Integer pid,
+            String commandLine,
+            String detail
+    ) {
+        String pidOrUnknown() {
+            return pid == null ? "unknown" : String.valueOf(pid);
+        }
+    }
+
+    private record CommandExecResult(
+            int exitCode,
+            String stdout,
+            String stderr,
+            List<String> stdoutLines
+    ) {
+        String firstContentLine() {
+            for (String line : stdoutLines) {
+                if (line != null && !line.trim().isBlank()) {
+                    return line.trim();
+                }
+            }
+            return "";
+        }
+
+        String stderrOrStdout() {
+            if (stderr != null && !stderr.isBlank()) {
+                return stderr;
+            }
+            return firstContentLine();
+        }
+    }
+
+    private record OrchestratorProbe(
+            Map<String, Object> payload,
+            boolean legacyFallback,
+            boolean running,
+            String stateText,
+            String uptimeSeconds,
+            String errorSummary
+    ) {
+        static OrchestratorProbe from(
+                Map<String, Object> payload,
+                boolean legacyFallback,
+                DoctorHttpResult primary,
+                DoctorHttpResult fallback,
+                String explicitError
+        ) {
+            if (payload == null) {
+                String error = explicitError;
+                if (error == null || error.isBlank()) {
+                    if (fallback != null) {
+                        error = fallback.errorSummary();
+                    } else if (primary != null) {
+                        error = primary.errorSummary();
+                    } else {
+                        error = "unknown";
+                    }
+                }
+                return new OrchestratorProbe(null, legacyFallback, false, "unknown", "n/a", error);
+            }
+
+            Object runningValue = payload.get("running");
+            if (runningValue == null) {
+                runningValue = payload.get("is_running");
+            }
+            if (runningValue == null) {
+                runningValue = payload.get("active");
+            }
+            if (runningValue == null) {
+                runningValue = payload.get("daemon_running");
+            }
+
+            boolean running;
+            if (runningValue instanceof Boolean b) {
+                running = b;
+            } else if (runningValue instanceof Number n) {
+                running = n.intValue() != 0;
+            } else {
+                String token = runningValue == null ? "" : String.valueOf(runningValue).toLowerCase();
+                running = token.equals("true") || token.equals("1") || token.contains("run");
+            }
+
+            Object stateValue = payload.get("status");
+            if (stateValue == null) {
+                stateValue = payload.get("state");
+            }
+            String stateText = stateValue == null ? (running ? "running" : "stopped") : String.valueOf(stateValue);
+
+            Object uptimeValue = payload.get("uptime_seconds");
+            if (uptimeValue == null) {
+                uptimeValue = payload.get("uptimeSeconds");
+            }
+            String uptime = uptimeValue == null ? "n/a" : String.valueOf(uptimeValue);
+            return new OrchestratorProbe(payload, legacyFallback, running, stateText, uptime, "");
         }
     }
 
@@ -9507,10 +10025,11 @@ public final class DPolarisJavaApp {
         }
         configureClientFromUI();
         setOrchestratorStatus("Orchestrator: checking...", COLOR_WARNING);
-        SwingWorker<Map<String, Object>, Void> worker = new SwingWorker<>() {
+        SwingWorker<OrchestratorProbe, Void> worker = new SwingWorker<>() {
             @Override
-            protected Map<String, Object> doInBackground() throws Exception {
-                return apiClient.fetchOrchestratorStatus();
+            protected OrchestratorProbe doInBackground() {
+                String host = hostField == null ? "127.0.0.1" : firstNonBlank(hostField.getText().trim(), "127.0.0.1");
+                return probeOrchestrator(host, currentPort());
             }
 
             @Override
@@ -9519,32 +10038,18 @@ public final class DPolarisJavaApp {
                     refreshOrchestratorStatusButton.setEnabled(true);
                 }
                 try {
-                    Map<String, Object> status = get();
-                    Object runningValue = findAnyValue(status, "running", "is_running", "active", "daemon_running");
-                    String stateText = firstNonBlank(
-                            stringOrEmpty(findAnyValue(status, "status", "state")),
-                            stringOrEmpty(runningValue)
-                    );
-                    String normalized = safeLower(stateText);
-
-                    boolean running = false;
-                    if (runningValue instanceof Boolean b) {
-                        running = b;
-                    } else if (runningValue instanceof Number number) {
-                        running = number.intValue() != 0;
-                    } else if (runningValue != null) {
-                        String token = safeLower(String.valueOf(runningValue));
-                        running = token.contains("run") || token.equals("true") || token.equals("1");
+                    OrchestratorProbe probe = get();
+                    if (probe.payload() == null) {
+                        setOrchestratorStatus("Orchestrator: unavailable", COLOR_DANGER);
+                        return;
                     }
-                    if (!running) {
-                        running = normalized.contains("run");
+                    if (probe.legacyFallback()) {
+                        setOrchestratorStatus("Orchestrator: legacy scheduler fallback", COLOR_WARNING);
+                    } else if (probe.running()) {
+                        setOrchestratorStatus("Orchestrator: running", COLOR_SUCCESS);
+                    } else {
+                        setOrchestratorStatus("Orchestrator: stopped", COLOR_MUTED);
                     }
-
-                    String label = running ? "Orchestrator: running" : "Orchestrator: stopped";
-                    if (!normalized.isBlank() && !normalized.equals("true") && !normalized.equals("false")) {
-                        label = "Orchestrator: " + stateText;
-                    }
-                    setOrchestratorStatus(label, running ? COLOR_SUCCESS : COLOR_MUTED);
                 } catch (Exception ex) {
                     setOrchestratorStatus("Orchestrator: unavailable", COLOR_DANGER);
                     appendBackendLog(ts() + " | Orchestrator status check failed: " + humanizeError(ex));

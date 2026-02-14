@@ -138,6 +138,60 @@ final class ApiClient {
         return wrapped;
     }
 
+    Map<String, Object> fetchOrchestratorStatusPrimary() throws IOException, InterruptedException {
+        Object response = requestWithFallback(
+                "GET",
+                List.of(
+                        "/api/orchestrator/status",
+                        "/orchestrator/status"
+                ),
+                null,
+                20
+        );
+        if (response instanceof Map<?, ?> mapRaw) {
+            return Json.asObject(mapRaw);
+        }
+        Map<String, Object> wrapped = new LinkedHashMap<>();
+        wrapped.put("status", String.valueOf(response));
+        return wrapped;
+    }
+
+    Map<String, Object> fetchSchedulerStatus() throws IOException, InterruptedException {
+        Object response = requestWithFallback(
+                "GET",
+                List.of(
+                        "/api/scheduler/status",
+                        "/scheduler/status"
+                ),
+                null,
+                20
+        );
+        if (response instanceof Map<?, ?> mapRaw) {
+            return Json.asObject(mapRaw);
+        }
+        Map<String, Object> wrapped = new LinkedHashMap<>();
+        wrapped.put("status", String.valueOf(response));
+        return wrapped;
+    }
+
+    Map<String, Object> restartBackendViaOrchestrator() throws IOException, InterruptedException {
+        Object response = requestWithFallback(
+                "POST",
+                List.of(
+                        "/api/orchestrator/restart-backend",
+                        "/orchestrator/restart-backend"
+                ),
+                "{}",
+                30
+        );
+        if (response instanceof Map<?, ?> mapRaw) {
+            return Json.asObject(mapRaw);
+        }
+        Map<String, Object> wrapped = new LinkedHashMap<>();
+        wrapped.put("status", String.valueOf(response));
+        return wrapped;
+    }
+
     Map<String, Object> startScan(Map<String, Object> payload) throws IOException, InterruptedException {
         String body = Json.compact(payload == null ? new LinkedHashMap<String, Object>() : payload);
         Object response = requestWithFallback(
