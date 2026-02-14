@@ -466,6 +466,9 @@ public final class DPolarisJavaApp {
             // Fall back to default.
         }
         UIManager.put("Button.disabledText", CONTROL_TEXT_DISABLED);
+        UIManager.put("Button.background", COLOR_CARD_ALT);
+        UIManager.put("Button.foreground", COLOR_TEXT);
+        UIManager.put("Button.select", COLOR_MENU_ACTIVE);
         UIManager.put("textInactiveText", CONTROL_TEXT_DISABLED);
     }
 
@@ -9761,10 +9764,13 @@ public final class DPolarisJavaApp {
     }
 
     private void styleButton(JButton button, boolean primary) {
+        button.setUI(new BasicButtonUI());
         button.setFont(uiFont.deriveFont(Font.BOLD, 13f));
         button.setFocusPainted(false);
         button.setOpaque(true);
         button.setContentAreaFilled(true);
+        button.setBorderPainted(true);
+        button.setRolloverEnabled(false);
         button.setBorder(new CompoundBorder(
                 new LineBorder(primary ? COLOR_ACCENT : COLOR_BORDER, 1, true),
                 new EmptyBorder(6, 12, 6, 12)
@@ -9779,11 +9785,14 @@ public final class DPolarisJavaApp {
     }
 
     private void styleNavButton(JButton button) {
+        button.setUI(new BasicButtonUI());
         button.setFont(uiFont.deriveFont(Font.BOLD, 14f));
         button.setHorizontalAlignment(JButton.LEFT);
         button.setFocusPainted(false);
         button.setOpaque(true);
         button.setContentAreaFilled(true);
+        button.setBorderPainted(true);
+        button.setRolloverEnabled(false);
         button.setBorder(new CompoundBorder(
                 new LineBorder(COLOR_BORDER, 1, true),
                 new EmptyBorder(10, 12, 10, 12)
