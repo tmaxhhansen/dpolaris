@@ -1,0 +1,36 @@
+{
+  "version": "2.0.0",
+  "tasks": [
+    {
+        "label": "dPolaris: build",
+        "type": "shell",
+        "command": ".\\gradlew.bat --no-daemon clean compileJava",
+        "options": {
+            "cwd": "${workspaceFolder}"
+        },
+        "problemMatcher": []
+    },
+    {
+        "label": "dPolaris: run",
+        "type": "shell",
+        "command": ".\\gradlew.bat --no-daemon run",
+        "options": {
+            "cwd": "${workspaceFolder}"
+        },
+        "problemMatcher": []
+    },
+    {
+        "label": "dPolaris: build+run",
+        "dependsOrder": "sequence",
+        "dependsOn": [
+            "dPolaris: build",
+            "dPolaris: run"
+        ],
+        "problemMatcher": [],
+        "group": {
+            "kind": "build",
+            "isDefault": true
+        }
+    }
+]
+}
