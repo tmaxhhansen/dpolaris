@@ -1,0 +1,7 @@
+# Gradle/build outputs
+.gradle/
+build/
+out/
+
+# Java artifacts
+*.class
