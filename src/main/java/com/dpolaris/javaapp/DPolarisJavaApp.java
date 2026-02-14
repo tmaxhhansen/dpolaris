@@ -13546,6 +13546,66 @@ public final class DPolarisJavaApp {
         DANGER
     }
 
+    private static final Color CONTROL_PANEL_PRIMARY_BG = new Color(24, 98, 198);
+    private static final Color CONTROL_PANEL_PRIMARY_HOVER_BG = new Color(36, 113, 218);
+    private static final Color CONTROL_PANEL_PRIMARY_PRESSED_BG = new Color(18, 78, 160);
+    private static final Color CONTROL_PANEL_DANGER_BG = new Color(166, 46, 58);
+    private static final Color CONTROL_PANEL_DANGER_HOVER_BG = new Color(185, 58, 72);
+    private static final Color CONTROL_PANEL_DANGER_PRESSED_BG = new Color(136, 35, 46);
+    private static final Color CONTROL_PANEL_NEUTRAL_BG = new Color(82, 90, 108);
+    private static final Color CONTROL_PANEL_NEUTRAL_HOVER_BG = new Color(98, 108, 129);
+    private static final Color CONTROL_PANEL_NEUTRAL_PRESSED_BG = new Color(65, 72, 88);
+    private static final Color CONTROL_PANEL_DISABLED_BG = new Color(56, 61, 72);
+    private static final Color CONTROL_PANEL_DISABLED_FG = new Color(173, 181, 197);
+
+    private static final class BackendControlButtonHoverAdapter extends MouseAdapter {
+        @Override
+        public void mouseEntered(MouseEvent e) {
+            if (e.getComponent() instanceof JButton button && button.isEnabled()) {
+                Color hover = (Color) button.getClientProperty("dpolaris.ctrl.hover");
+                if (hover != null) {
+                    button.setBackground(hover);
+                }
+            }
+        }
+
+        @Override
+        public void mouseExited(MouseEvent e) {
+            if (e.getComponent() instanceof JButton button) {
+                Color base = (Color) button.getClientProperty("dpolaris.ctrl.base");
+                if (base != null) {
+                    button.setBackground(base);
+                }
+            }
+        }
+
+        @Override
+        public void mousePressed(MouseEvent e) {
+            if (e.getComponent() instanceof JButton button && button.isEnabled()) {
+                Color pressed = (Color) button.getClientProperty("dpolaris.ctrl.pressed");
+                if (pressed != null) {
+                    button.setBackground(pressed);
+                }
+            }
+        }
+
+        @Override
+        public void mouseReleased(MouseEvent e) {
+            if (e.getComponent() instanceof JButton button && button.isEnabled()) {
+                Color hover = (Color) button.getClientProperty("dpolaris.ctrl.hover");
+                Color base = (Color) button.getClientProperty("dpolaris.ctrl.base");
+                if (button.contains(e.getPoint())) {
+                    button.setBackground(hover == null ? base : hover);
+                } else {
+                    button.setBackground(base == null ? hover : base);
+                }
+            }
+        }
+    }
+
+    private static final BackendControlButtonHoverAdapter BACKEND_CONTROL_BUTTON_HOVER_ADAPTER =
+            new BackendControlButtonHoverAdapter();
+
     private static final class ButtonHoverAdapter extends MouseAdapter {
         @Override
         public void mouseEntered(MouseEvent e) {
@@ -13752,11 +13812,68 @@ public final class DPolarisJavaApp {
             return;
         }
         button.setEnabled(enabled);
-        if (button == saveBackendLogsButton) {
-            styleActionButton(button);
+        switch (tone) {
+            case PRIMARY -> applyPrimaryButtonStyle(button);
+            case DANGER -> applyDangerButtonStyle(button);
+            default -> applyNeutralButtonStyle(button);
+        }
+    }
+
+    private void applyPrimaryButtonStyle(JButton button) {
+        applyBackendControlButtonStyle(
+                button,
+                CONTROL_PANEL_PRIMARY_BG,
+                CONTROL_PANEL_PRIMARY_HOVER_BG,
+                CONTROL_PANEL_PRIMARY_PRESSED_BG
+        );
+    }
+
+    private void applyDangerButtonStyle(JButton button) {
+        applyBackendControlButtonStyle(
+                button,
+                CONTROL_PANEL_DANGER_BG,
+                CONTROL_PANEL_DANGER_HOVER_BG,
+                CONTROL_PANEL_DANGER_PRESSED_BG
+        );
+    }
+
+    private void applyNeutralButtonStyle(JButton button) {
+        applyBackendControlButtonStyle(
+                button,
+                CONTROL_PANEL_NEUTRAL_BG,
+                CONTROL_PANEL_NEUTRAL_HOVER_BG,
+                CONTROL_PANEL_NEUTRAL_PRESSED_BG
+        );
+    }
+
+    private void applyBackendControlButtonStyle(JButton button, Color base, Color hover, Color pressed) {
+        if (button == null) {
             return;
         }
-        styleControlButton(button, tone);
+        button.setUI(new BasicButtonUI());
+        button.setOpaque(true);
+        button.setContentAreaFilled(true);
+        button.setBorderPainted(false);
+        button.setFocusPainted(false);
+        button.setRolloverEnabled(true);
+        button.setFont(uiFont.deriveFont(Font.BOLD, 13f));
+        button.setForeground(button.isEnabled() ? Color.WHITE : CONTROL_PANEL_DISABLED_FG);
+        button.setBackground(button.isEnabled() ? base : CONTROL_PANEL_DISABLED_BG);
+        button.setBorder(new EmptyBorder(8, 14, 8, 14));
+        button.setMargin(new Insets(8, 14, 8, 14));
+        button.putClientProperty("dpolaris.ctrl.base", button.isEnabled() ? base : CONTROL_PANEL_DISABLED_BG);
+        button.putClientProperty("dpolaris.ctrl.hover", button.isEnabled() ? hover : CONTROL_PANEL_DISABLED_BG);
+        button.putClientProperty("dpolaris.ctrl.pressed", button.isEnabled() ? pressed : CONTROL_PANEL_DISABLED_BG);
+        boolean hasAdapter = false;
+        for (java.awt.event.MouseListener listener : button.getMouseListeners()) {
+            if (listener == BACKEND_CONTROL_BUTTON_HOVER_ADAPTER) {
+                hasAdapter = true;
+                break;
+            }
+        }
+        if (!hasAdapter) {
+            button.addMouseListener(BACKEND_CONTROL_BUTTON_HOVER_ADAPTER);
+        }
     }
 
     private void styleControlButton(JButton button, ButtonTone tone) {
