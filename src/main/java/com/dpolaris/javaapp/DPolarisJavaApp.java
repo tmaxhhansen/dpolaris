@@ -163,6 +163,8 @@ public final class DPolarisJavaApp {
     private JButton stopDaemonButton;
     private JButton clearBackendLogsButton;
     private JButton resetRestartCleanButton;
+    private JButton runAllOpsButton;
+    private JButton runAllOpsStartUiButton;
     private JLabel backendStatusValue;
     private JLabel daemonStatusValue;
     private JTextArea backendLogArea;
@@ -432,6 +434,7 @@ public final class DPolarisJavaApp {
 
     private volatile SwingWorker<Void, String> activeTrainingWorker;
     private volatile boolean backendActionInFlight;
+    private volatile boolean opsRunnerInFlight;
     private volatile boolean backendAttachedExternal;
     private volatile Integer backendAttachedExternalPid;
     private volatile String backendAttachedExternalCommandLine = "";
@@ -8128,6 +8131,8 @@ public final class DPolarisJavaApp {
         stopDaemonButton = new JButton("Stop Daemon");
         clearBackendLogsButton = new JButton("Clear Logs");
         resetRestartCleanButton = new JButton("Reset & Restart (Clean)");
+        runAllOpsButton = new JButton("Run All (Ops)");
+        runAllOpsStartUiButton = new JButton("Run All + Start UI");
         refreshOrchestratorStatusButton = new JButton("Refresh Orchestrator");
         backendStatusValue = new JLabel();
         daemonStatusValue = new JLabel();
@@ -8143,10 +8148,14 @@ public final class DPolarisJavaApp {
         styleDanger(stopDaemonButton);
         styleSecondary(clearBackendLogsButton);
         styleDanger(resetRestartCleanButton);
+        stylePrimary(runAllOpsButton);
+        styleSecondary(runAllOpsStartUiButton);
         styleNeutralButton(refreshOrchestratorStatusButton);
         resetRestartCleanButton.setToolTipText(
                 "Stops backend/daemon/orchestrator, clears stale pid files, then starts backend and waits for /health."
         );
+        runAllOpsButton.setToolTipText("Run C:\\my-git\\dpolaris_ops\\run.ps1");
+        runAllOpsStartUiButton.setToolTipText("Run C:\\my-git\\dpolaris_ops\\run.ps1 -StartUI");
         styleStatusPill(backendStatusValue, "STOPPED");
         styleStatusPill(daemonStatusValue, "Scheduler: unknown");
         styleStatusPill(orchestratorStatusValue, "Orchestrator: unknown");
@@ -8194,6 +8203,13 @@ public final class DPolarisJavaApp {
         orchestratorActions.add(refreshOrchestratorStatusButton);
         orchestratorActions.add(orchestratorStatusValue);
 
+        JPanel opsActions = new JPanel(new FlowLayout(FlowLayout.LEFT, 10, 6));
+        opsActions.setOpaque(false);
+        opsActions.setMinimumSize(new Dimension(10, 46));
+        opsActions.setPreferredSize(new Dimension(10, 46));
+        opsActions.add(runAllOpsButton);
+        opsActions.add(runAllOpsStartUiButton);
+
         JPanel controlsBody = new JPanel(new GridBagLayout());
         controlsBody.setOpaque(false);
         GridBagConstraints gbc = new GridBagConstraints();
@@ -8222,6 +8238,10 @@ public final class DPolarisJavaApp {
 
         gbc.gridy++;
         gbc.insets = new Insets(2, 0, 0, 0);
+        controlsBody.add(opsActions, gbc);
+
+        gbc.gridy++;
+        gbc.insets = new Insets(2, 0, 0, 0);
         controlsBody.add(noteLabel, gbc);
 
         JPanel controlsCard = createCardPanel();
@@ -8232,6 +8252,8 @@ public final class DPolarisJavaApp {
         JScrollPane logs = createLogScrollPane(backendLogArea, "Backend Activity (select + copy supported)");
         refreshOrchestratorStatusButton.addActionListener(e -> refreshOrchestratorStatus());
         resetRestartCleanButton.addActionListener(e -> resetAndRestartClean());
+        runAllOpsButton.addActionListener(e -> runOpsRunner(false));
+        runAllOpsStartUiButton.addActionListener(e -> runOpsRunner(true));
 
         root.add(controlsCard, BorderLayout.NORTH);
         root.add(logs, BorderLayout.CENTER);
@@ -10092,6 +10114,9 @@ public final class DPolarisJavaApp {
         applyBackendButtonState(stopDaemonButton, !actionInFlight && !starting, ButtonTone.DANGER);
         applyBackendButtonState(clearBackendLogsButton, true, ButtonTone.SECONDARY);
         applyBackendButtonState(refreshOrchestratorStatusButton, !actionInFlight, ButtonTone.SECONDARY);
+        boolean opsEnabled = !actionInFlight && !opsRunnerInFlight;
+        applyBackendButtonState(runAllOpsButton, opsEnabled, ButtonTone.PRIMARY);
+        applyBackendButtonState(runAllOpsStartUiButton, opsEnabled, ButtonTone.SECONDARY);
 
         if (backendStatusValue == null) {
             return;
@@ -10549,6 +10574,88 @@ public final class DPolarisJavaApp {
             Toolkit.getDefaultToolkit().getSystemClipboard().setContents(new StringSelection(killCmd), null);
             appendBackendLog(ts() + " | [SYSTEM] Copied kill command to clipboard: " + killCmd);
         }
+    }
+
+    private void runOpsRunner(boolean startUi) {
+        if (opsRunnerInFlight) {
+            appendBackendLog(ts() + " | [SYSTEM] Ops runner is already in progress.");
+            return;
+        }
+        Path runner = Path.of("C:\\my-git\\dpolaris_ops\\run.ps1");
+        if (!Files.isRegularFile(runner)) {
+            appendBackendLog(ts() + " | [SYSTEM] Ops runner not found: " + runner);
+            JOptionPane.showMessageDialog(
+                    frame,
+                    "Ops runner script not found:\n" + runner,
+                    "Run All (Ops)",
+                    JOptionPane.WARNING_MESSAGE
+            );
+            return;
+        }
+
+        opsRunnerInFlight = true;
+        refreshBackendControls();
+        appendBackendLog(ts() + " | [SYSTEM] Starting ops runner"
+                + (startUi ? " with -StartUI" : "")
+                + "...");
+
+        SwingWorker<Integer, Void> worker = new SwingWorker<>() {
+            @Override
+            protected Integer doInBackground() throws Exception {
+                List<String> command = new ArrayList<>();
+                command.add("powershell");
+                command.add("-ExecutionPolicy");
+                command.add("Bypass");
+                command.add("-File");
+                command.add(runner.toString());
+                if (startUi) {
+                    command.add("-StartUI");
+                }
+
+                ProcessBuilder pb = new ProcessBuilder(command);
+                pb.directory(runner.getParent().toFile());
+                Process process = pb.start();
+                appendBackendLog(ts() + " | [SYSTEM] Ops process started.");
+
+                Thread outThread = startProcessLogPump(process.getInputStream(), "OPS-OUT");
+                Thread errThread = startProcessLogPump(process.getErrorStream(), "OPS-ERR");
+
+                int exitCode = process.waitFor();
+                outThread.join(1000);
+                errThread.join(1000);
+                return exitCode;
+            }
+
+            @Override
+            protected void done() {
+                try {
+                    int exitCode = get();
+                    appendBackendLog(ts() + " | [SYSTEM] Ops runner finished with exit code " + exitCode + ".");
+                } catch (Exception ex) {
+                    appendBackendLog(ts() + " | [SYSTEM] Ops runner failed: " + humanizeError(ex));
+                } finally {
+                    opsRunnerInFlight = false;
+                    refreshBackendControls();
+                }
+            }
+        };
+        worker.execute();
+    }
+
+    private Thread startProcessLogPump(java.io.InputStream stream, String channel) {
+        Thread thread = new Thread(() -> {
+            try (BufferedReader reader = new BufferedReader(new InputStreamReader(stream, StandardCharsets.UTF_8))) {
+                String line;
+                while ((line = reader.readLine()) != null) {
+                    appendBackendLog(ts() + " | [" + channel + "] " + line);
+                }
+            } catch (IOException ex) {
+                appendBackendLog(ts() + " | [SYSTEM] " + channel + " stream closed: " + ex.getMessage());
+            }
+        }, "ops-runner-" + safeLower(channel));
+        thread.setDaemon(true);
+        thread.start();
+        return thread;
     }
 
     private void saveBackendLogs() {
