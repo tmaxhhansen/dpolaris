@@ -1024,7 +1024,11 @@ public final class DPolarisJavaApp {
                         universeApiListModel.addElement(name);
                     }
                     if (names.isEmpty()) {
-                        styleInlineStatus(universeApiStatusLabel, "Universe API: no universes returned", COLOR_WARNING);
+                        styleInlineStatus(
+                                universeApiStatusLabel,
+                                "Universe list is empty. You can still enter a universe name manually.",
+                                COLOR_WARNING
+                        );
                         universeApiTableModel.setRows(List.of());
                         styleInlineStatus(universeApiMetaLabel, "Rows: 0", COLOR_MUTED);
                         return;
@@ -10174,6 +10178,7 @@ public final class DPolarisJavaApp {
 
             @Override
             protected void done() {
+                boolean runCleanReset = false;
                 try {
                     BackendStartResult result = get();
                     if (result.reusedExisting()) {
@@ -10183,12 +10188,28 @@ public final class DPolarisJavaApp {
                                     + result.portOwnerPid()
                                     + (result.portOwnerCommand().isBlank() ? "" : " | " + result.portOwnerCommand()));
                         }
-                        styleStatusLabel(connectionLabel, "Connected", COLOR_SUCCESS);
+                        styleStatusLabel(connectionLabel, "Backend already running", COLOR_SUCCESS);
                     } else if (result.blockedByPort()) {
                         String warning = "Port is in use by PID " + result.portOwnerPid()
-                                + "; cannot start backend. Use Stop Backend or free the port.";
+                                + "; /health failed. Cannot start backend.";
                         appendBackendLog(ts() + " | [WARN] " + warning);
+                        if (!result.portOwnerCommand().isBlank()) {
+                            appendBackendLog(ts() + " | [WARN] Port owner command: "
+                                    + truncateForDetail(result.portOwnerCommand()));
+                        }
                         styleStatusLabel(connectionLabel, "Port conflict on " + host + ":" + port, COLOR_WARNING);
+                        Object[] options = {"Run Reset & Restart (Clean)", "Close"};
+                        int choice = JOptionPane.showOptionDialog(
+                                frame,
+                                warning + "\n\nUse Reset & Restart (Clean) to recover safely.",
+                                "Backend Start Blocked",
+                                JOptionPane.DEFAULT_OPTION,
+                                JOptionPane.WARNING_MESSAGE,
+                                null,
+                                options,
+                                options[0]
+                        );
+                        runCleanReset = choice == 0;
                     } else {
                         appendBackendLog(ts() + " | [SYSTEM] Backend is healthy.");
                         styleStatusLabel(connectionLabel, "Connected", COLOR_SUCCESS);
@@ -10209,6 +10230,9 @@ public final class DPolarisJavaApp {
                     backendActionInFlight = false;
                 }
                 refreshBackendControls();
+                if (runCleanReset) {
+                    resetAndRestartClean();
+                }
             }
         };
         worker.execute();
@@ -13522,6 +13546,56 @@ public final class DPolarisJavaApp {
         DANGER
     }
 
+    private static final class ButtonHoverAdapter extends MouseAdapter {
+        @Override
+        public void mouseEntered(MouseEvent e) {
+            if (e.getComponent() instanceof JButton button && button.isEnabled()) {
+                Color hover = (Color) button.getClientProperty("dpolaris.hoverBg");
+                if (hover != null) {
+                    button.setBackground(hover);
+                }
+            }
+        }
+
+        @Override
+        public void mouseExited(MouseEvent e) {
+            if (e.getComponent() instanceof JButton button) {
+                Color base = (Color) button.getClientProperty("dpolaris.baseBg");
+                if (base != null) {
+                    button.setBackground(base);
+                }
+            }
+        }
+
+        @Override
+        public void mousePressed(MouseEvent e) {
+            if (e.getComponent() instanceof JButton button && button.isEnabled()) {
+                Color pressed = (Color) button.getClientProperty("dpolaris.pressedBg");
+                if (pressed != null) {
+                    button.setBackground(pressed);
+                }
+            }
+        }
+
+        @Override
+        public void mouseReleased(MouseEvent e) {
+            if (e.getComponent() instanceof JButton button && button.isEnabled()) {
+                Color hover = (Color) button.getClientProperty("dpolaris.hoverBg");
+                Color base = (Color) button.getClientProperty("dpolaris.baseBg");
+                if (hover == null && base == null) {
+                    return;
+                }
+                if (button.contains(e.getPoint())) {
+                    button.setBackground(hover == null ? base : hover);
+                } else {
+                    button.setBackground(base == null ? hover : base);
+                }
+            }
+        }
+    }
+
+    private static final ButtonHoverAdapter BUTTON_HOVER_ADAPTER = new ButtonHoverAdapter();
+
     private void applyCommonButtonStyle(JButton button) {
         if (button == null) {
             return;
@@ -13532,16 +13606,29 @@ public final class DPolarisJavaApp {
         button.setContentAreaFilled(true);
         button.setBorderPainted(true);
         button.setFocusPainted(false);
-        button.setRolloverEnabled(false);
+        button.setRolloverEnabled(true);
         button.setPreferredSize(CONTROL_BUTTON_SIZE);
         button.setMinimumSize(CONTROL_BUTTON_SIZE);
         button.setMargin(new Insets(0, 12, 0, 12));
+        boolean hasHoverAdapter = false;
+        for (java.awt.event.MouseListener listener : button.getMouseListeners()) {
+            if (listener == BUTTON_HOVER_ADAPTER) {
+                hasHoverAdapter = true;
+                break;
+            }
+        }
+        if (!hasHoverAdapter) {
+            button.addMouseListener(BUTTON_HOVER_ADAPTER);
+        }
     }
 
     private void applyDisabledStyle(JButton button, Color disabledBackground, Color disabledBorder) {
         if (button == null) {
             return;
         }
+        button.putClientProperty("dpolaris.baseBg", disabledBackground);
+        button.putClientProperty("dpolaris.hoverBg", disabledBackground);
+        button.putClientProperty("dpolaris.pressedBg", disabledBackground);
         button.setBackground(disabledBackground);
         button.setForeground(CONTROL_TEXT_DISABLED);
         button.setBorder(new CompoundBorder(
@@ -13575,6 +13662,9 @@ public final class DPolarisJavaApp {
             applyDisabledStyle(button, disabledBg, disabledBorder);
             return;
         }
+        button.putClientProperty("dpolaris.baseBg", enabledBg);
+        button.putClientProperty("dpolaris.hoverBg", enabledBg.brighter());
+        button.putClientProperty("dpolaris.pressedBg", enabledBg.darker());
         button.setBackground(enabledBg);
         button.setForeground(CONTROL_TEXT_ENABLED);
         button.setBorder(new CompoundBorder(
@@ -13704,6 +13794,9 @@ public final class DPolarisJavaApp {
             applyDisabledStyle(button, disabledBg, disabledBorder);
             return;
         }
+        button.putClientProperty("dpolaris.baseBg", enabledBg);
+        button.putClientProperty("dpolaris.hoverBg", enabledBg.brighter());
+        button.putClientProperty("dpolaris.pressedBg", enabledBg.darker());
         button.setForeground(CONTROL_TEXT_ENABLED);
         button.setBackground(enabledBg);
         button.setBorder(new CompoundBorder(
