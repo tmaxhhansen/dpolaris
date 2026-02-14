@@ -9134,6 +9134,75 @@ public final class DPolarisJavaApp {
         return new PortOwnershipInfo(true, pid, readCommandLineForPid(pid), "owner resolved");
     }
 
+    private List<Integer> findListeningPidsOnPortWindows(int port) {
+        if (!isWindows()) {
+            return List.of();
+        }
+        CommandExecResult netstat = runCommand(List.of("cmd", "/c", "netstat -ano -p tcp"), 5000);
+        if (netstat.exitCode() != 0 && netstat.stdout().isBlank()) {
+            return List.of();
+        }
+        LinkedHashSet<Integer> pids = new LinkedHashSet<>();
+        for (String rawLine : netstat.stdoutLines()) {
+            String line = rawLine == null ? "" : rawLine.trim();
+            if (line.isBlank()) {
+                continue;
+            }
+            String[] parts = line.split("\\s+");
+            if (parts.length < 5 || !"TCP".equalsIgnoreCase(parts[0])) {
+                continue;
+            }
+            Integer localPort = extractPortFromEndpoint(parts[1]);
+            if (localPort == null || localPort != port) {
+                continue;
+            }
+            String state = parts[3];
+            if (!"LISTENING".equalsIgnoreCase(state) && !"LISTEN".equalsIgnoreCase(state)) {
+                continue;
+            }
+            try {
+                pids.add(Integer.parseInt(parts[4].trim()));
+            } catch (NumberFormatException ignored) {
+                // Ignore malformed PID rows
+            }
+        }
+        return new ArrayList<>(pids);
+    }
+
+    private boolean killListeningPortOwnersWindows(String host, int port, int timeoutMs, String reason) {
+        if (!isWindows()) {
+            return true;
+        }
+        List<Integer> owners = findListeningPidsOnPortWindows(port);
+        if (owners.isEmpty()) {
+            appendBackendLog(ts() + " | [SYSTEM] " + reason + ": port " + port + " already free.");
+            return true;
+        }
+        for (Integer pid : owners) {
+            if (pid == null || pid <= 0) {
+                continue;
+            }
+            String cmd = readCommandLineForPid(pid);
+            appendBackendLog(ts() + " | [SYSTEM] " + reason + ": found LISTENING owner pid=" + pid
+                    + " cmd=" + truncateForDetail(firstNonBlank(cmd, "(unavailable)")));
+            boolean killed = killProcessByPid(pid);
+            if (killed) {
+                appendBackendLog(ts() + " | [SYSTEM] Killed port owner pid=" + pid);
+            } else {
+                appendBackendLog(ts() + " | [SYSTEM] Failed to kill port owner pid=" + pid);
+            }
+        }
+        boolean cleared = waitForPortToClear(host, port, timeoutMs);
+        if (!cleared) {
+            PortOwnershipInfo owner = detectPortOwnership(host, port);
+            appendBackendLog(ts() + " | [SYSTEM] Port " + port + " still in use by pid="
+                    + firstNonBlank(owner.pidOrUnknown(), "unknown")
+                    + " cmd=" + truncateForDetail(firstNonBlank(owner.commandLine(), "(unavailable)")));
+            return false;
+        }
+        return true;
+    }
+
     private Integer extractPortFromEndpoint(String endpoint) {
         if (endpoint == null || endpoint.isBlank()) {
             return null;
@@ -9938,6 +10007,18 @@ public final class DPolarisJavaApp {
         }
     }
 
+    private String backendLogTail(int lines) {
+        int safeLines = Math.max(1, lines);
+        synchronized (backendLogBuffer) {
+            if (backendLogBuffer.isEmpty()) {
+                return "";
+            }
+            List<String> list = new ArrayList<>(backendLogBuffer);
+            int from = Math.max(0, list.size() - safeLines);
+            return String.join(" || ", list.subList(from, list.size()));
+        }
+    }
+
     private void styleNavButton(JButton button) {
         button.setUI(new BasicButtonUI());
         button.setFont(uiFont.deriveFont(Font.BOLD, 14f));
@@ -10216,35 +10297,15 @@ public final class DPolarisJavaApp {
         SwingWorker<BackendStartResult, Void> worker = new SwingWorker<>() {
             @Override
             protected BackendStartResult doInBackground() throws Exception {
-                if (quickHealthCheck(host, port, 900)) {
-                    PortOwnershipInfo ownership = detectPortOwnership(host, port);
-                    attachExternalBackend(ownership.pid() == null ? null : ownership);
-                    return BackendStartResult.reused(ownership);
-                }
-
-                PortOwnershipInfo ownership = detectPortOwnership(host, port);
-                if (ownership.listening() && ownership.pid() != null) {
-                    if (isManagedVenvBackendOwner(ownership.commandLine())) {
-                        appendBackendLog(ts() + " | [SYSTEM] Port " + port + " is held by managed backend PID "
-                                + ownership.pid() + "; stopping owner before start.");
-                        boolean stopped = stopProcessGracefullyThenForce(ownership.pid(), 3500);
-                        if (!stopped) {
-                            throw new IOException("Failed to stop managed backend PID " + ownership.pid()
-                                    + " before start.");
-                        }
-                        boolean cleared = waitForPortToClear(host, port, 7000);
-                        if (!cleared) {
-                            PortOwnershipInfo currentOwner = detectPortOwnership(host, port);
-                            throw new IOException("Port " + port + " did not clear after stopping managed owner. "
-                                    + "Current owner PID=" + firstNonBlank(currentOwner.pidOrUnknown(), "unknown"));
-                        }
-                    } else {
-                        clearExternalBackendAttachment();
-                        return BackendStartResult.portConflict(ownership);
-                    }
+                appendBackendLog(ts() + " | [SYSTEM] Preparing backend start: clearing port " + port + " owners.");
+                if (!killListeningPortOwnersWindows(host, port, 8000, "Start Backend")) {
+                    PortOwnershipInfo owner = detectPortOwnership(host, port);
+                    throw new IOException("Port " + port + " is still occupied by PID "
+                            + firstNonBlank(owner.pidOrUnknown(), "unknown"));
                 }
 
                 clearExternalBackendAttachment();
+                appendBackendLog(ts() + " | [SYSTEM] Starting backend...");
                 backendController.start();
                 boolean healthy = backendController.waitUntilHealthy(Duration.ofSeconds(20), Duration.ofMillis(500));
                 if (!healthy) {
@@ -10263,42 +10324,16 @@ public final class DPolarisJavaApp {
             protected void done() {
                 try {
                     BackendStartResult result = get();
-                    if (result.reusedExisting()) {
-                        appendBackendLog(ts() + " | [SYSTEM] Backend already running; reusing existing server.");
-                        if (result.portOwnerPid() != null) {
-                            appendBackendLog(ts() + " | [SYSTEM] Attached to external backend PID "
-                                    + result.portOwnerPid()
-                                    + (result.portOwnerCommand().isBlank() ? "" : " | " + result.portOwnerCommand()));
-                        }
-                        styleStatusLabel(connectionLabel, "Connected", COLOR_SUCCESS);
-                    } else if (result.blockedByPort()) {
-                        String warning = "Port in use; backend may be running externally (PID "
-                                + result.portOwnerPid() + ").";
-                        appendBackendLog(ts() + " | [WARN] " + warning);
-                        if (!result.portOwnerCommand().isBlank()) {
-                            appendBackendLog(ts() + " | [WARN] Owner command: " + truncateForDetail(result.portOwnerCommand()));
-                        }
-                        styleStatusLabel(connectionLabel, "Port conflict on " + host + ":" + port, COLOR_WARNING);
-                        showUnknownPortOwnerDialog(
-                                new PortOwnershipInfo(true, result.portOwnerPid(), result.portOwnerCommand(), "port conflict"),
-                                port
-                        );
-                    } else {
-                        appendBackendLog(ts() + " | [SYSTEM] Backend is healthy.");
-                        styleStatusLabel(connectionLabel, "Connected", COLOR_SUCCESS);
-                    }
+                    appendBackendLog(ts() + " | [PASS] Backend healthy.");
+                    styleStatusLabel(connectionLabel, "Connected", COLOR_SUCCESS);
                 } catch (Exception ex) {
                     String message = humanizeError(ex);
-                    appendBackendLog(ts() + " | [SYSTEM] Backend start failed: " + message);
-                    styleStatusLabel(connectionLabel, "Connection failed", COLOR_DANGER);
-                    if (message.contains("Missing python executable:")) {
-                        JOptionPane.showMessageDialog(
-                                frame,
-                                message,
-                                "Backend Start Error",
-                                JOptionPane.ERROR_MESSAGE
-                        );
+                    appendBackendLog(ts() + " | [FAIL] Backend start failed: " + message);
+                    String tail = backendLogTail(8);
+                    if (!tail.isBlank()) {
+                        appendBackendLog(ts() + " | [SYSTEM] backend tail: " + tail);
                     }
+                    styleStatusLabel(connectionLabel, "Connection failed", COLOR_DANGER);
                 } finally {
                     backendActionInFlight = false;
                 }
@@ -10377,28 +10412,14 @@ public final class DPolarisJavaApp {
         SwingWorker<Void, Void> worker = new SwingWorker<>() {
             @Override
             protected Void doInBackground() throws Exception {
-                if (!backendController.isProcessAlive() && quickHealthCheck(host, port, 900)) {
-                    PortOwnershipInfo ownership = detectPortOwnership(host, port);
-                    attachExternalBackend(ownership.pid() == null ? null : ownership);
-                    throw new IOException("Backend is external; restart it manually.");
-                }
                 backendController.stop();
-                if (!waitForPortToClear(host, port, 7000)) {
+                appendBackendLog(ts() + " | [SYSTEM] Preparing backend restart: clearing port " + port + " owners.");
+                if (!killListeningPortOwnersWindows(host, port, 8000, "Restart Backend")) {
                     PortOwnershipInfo owner = detectPortOwnership(host, port);
-                    if (owner.pid() != null && isManagedVenvBackendOwner(owner.commandLine())) {
-                        appendBackendLog(ts() + " | [SYSTEM] Restart: forcing managed owner PID "
-                                + owner.pid() + " to release port " + port + ".");
-                        if (!stopProcessGracefullyThenForce(owner.pid(), 2500)) {
-                            throw new IOException("Failed to terminate managed backend PID " + owner.pid() + ".");
-                        }
-                        if (!waitForPortToClear(host, port, 5000)) {
-                            throw new IOException("Port " + port + " remained in use after managed termination.");
-                        }
-                    } else if (owner.pid() != null) {
-                        throw new IOException("Port " + port + " is owned by unknown PID " + owner.pid()
-                                + "; restart refused.");
-                    }
+                    throw new IOException("Port " + port + " is still occupied by PID "
+                            + firstNonBlank(owner.pidOrUnknown(), "unknown"));
                 }
+                appendBackendLog(ts() + " | [SYSTEM] Starting backend...");
                 backendController.start();
                 boolean healthy = backendController.waitUntilHealthy(Duration.ofSeconds(20), Duration.ofMillis(500));
                 if (!healthy) {
@@ -10417,10 +10438,14 @@ public final class DPolarisJavaApp {
             protected void done() {
                 try {
                     get();
-                    appendBackendLog(ts() + " | [SYSTEM] Backend restart completed.");
+                    appendBackendLog(ts() + " | [PASS] Backend healthy.");
                     styleStatusLabel(connectionLabel, "Connected", COLOR_SUCCESS);
                 } catch (Exception ex) {
-                    appendBackendLog(ts() + " | [SYSTEM] Backend restart failed: " + humanizeError(ex));
+                    appendBackendLog(ts() + " | [FAIL] Backend restart failed: " + humanizeError(ex));
+                    String tail = backendLogTail(8);
+                    if (!tail.isBlank()) {
+                        appendBackendLog(ts() + " | [SYSTEM] backend tail: " + tail);
+                    }
                     styleStatusLabel(connectionLabel, "Connection failed", COLOR_DANGER);
                 } finally {
                     backendActionInFlight = false;
@@ -10480,60 +10505,20 @@ public final class DPolarisJavaApp {
                     appendBackendLog(ts() + " | [SYSTEM] [4/7] Clearing stale runtime files.");
                     clearStaleRuntimeFiles();
 
-                    appendBackendLog(ts() + " | [SYSTEM] [5/7] Re-checking /health before restart.");
-                    if (quickHealthCheck(host, port, 1200)) {
+                    appendBackendLog(ts() + " | [SYSTEM] [5/7] Clearing port " + port + " owners.");
+                    if (!killListeningPortOwnersWindows(host, port, 8000, "Reset & Restart")) {
                         PortOwnershipInfo owner = detectPortOwnership(host, port);
-                        attachExternalBackend(owner.pid() == null ? null : owner);
-                        appendBackendLog(ts() + " | [SYSTEM] Backend already healthy after cleanup; reusing existing server.");
-                        return CleanResetResult.successResult();
+                        return CleanResetResult.failureResult(
+                                "Port " + port + " remains in use by PID " + firstNonBlank(owner.pidOrUnknown(), "unknown") + ".",
+                                owner
+                        );
                     }
 
-                    appendBackendLog(ts() + " | [SYSTEM] [6/7] Checking port ownership.");
-                    PortOwnershipInfo ownership = detectPortOwnership(host, port);
-                    if (ownership.listening() && ownership.pid() != null) {
-                        appendBackendLog(ts() + " | [SYSTEM] Detected LISTENING owner on "
-                                + host + ":" + port + " -> PID " + ownership.pid()
-                                + " | cmd: " + truncateForDetail(ownership.commandLine()));
-                        boolean managedMatch = managedPid != null && ownership.pid().longValue() == managedPid.longValue();
-                        boolean knownBackendOwner = isManagedVenvBackendOwner(ownership.commandLine());
-                        if (managedMatch || knownBackendOwner) {
-                            String reason = managedMatch
-                                    ? "managed PID match"
-                                    : "owner command line matches managed venv backend signature";
-                            appendBackendLog(ts() + " | [SYSTEM] Forcing termination of PID "
-                                    + ownership.pid() + " (" + reason + ").");
-                            boolean killed = stopProcessGracefullyThenForce(ownership.pid(), 3000);
-                            if (!killed) {
-                                return CleanResetResult.failureResult(
-                                        "Failed to terminate backend owner PID " + ownership.pid() + " on port " + port + ".",
-                                        ownership
-                                );
-                            }
-                            boolean cleared = waitForPortToClear(host, port, 3000);
-                            ownership = detectPortOwnership(host, port);
-                            if (!cleared || ownership.listening()) {
-                                appendBackendLog(ts() + " | [SYSTEM] Port " + port + " still LISTENING after kill attempt."
-                                        + " Current owner PID "
-                                        + firstNonBlank(ownership.pidOrUnknown(), "unknown")
-                                        + " | cmd: " + truncateForDetail(ownership.commandLine()));
-                                return CleanResetResult.failureResult(
-                                        "Port " + port + " remains in use after backend owner termination attempt.",
-                                        ownership
-                                );
-                            }
-                            appendBackendLog(ts() + " | [SYSTEM] Port " + port + " is now free.");
-                        } else {
-                            String msg = "Port is in use by PID " + ownership.pid()
-                                    + "; cannot start backend. Unknown owner will not be killed automatically.";
-                            appendBackendLog(ts() + " | [SYSTEM] WARN: " + msg);
-                            return CleanResetResult.failureResult(msg, ownership);
-                        }
-                    }
-
-                    appendBackendLog(ts() + " | [SYSTEM] [7/7] Starting backend cleanly.");
+                    appendBackendLog(ts() + " | [SYSTEM] [6/7] Starting backend cleanly.");
+                    appendBackendLog(ts() + " | [SYSTEM] Starting backend...");
                     backendController.start();
 
-                    appendBackendLog(ts() + " | [SYSTEM] [8/8] Waiting for /health (30s timeout).");
+                    appendBackendLog(ts() + " | [SYSTEM] [7/7] Waiting for /health (30s timeout).");
                     boolean healthy = backendController.waitUntilHealthy(Duration.ofSeconds(30), Duration.ofMillis(500));
                     if (!healthy) {
                         backendController.stop();
@@ -10559,31 +10544,23 @@ public final class DPolarisJavaApp {
                 try {
                     CleanResetResult result = get();
                     if (result.success()) {
-                        appendBackendLog(ts() + " | [SYSTEM] Reset & Restart (Clean) completed successfully.");
+                        appendBackendLog(ts() + " | [PASS] Backend healthy.");
                         styleStatusLabel(connectionLabel, "Connected", COLOR_SUCCESS);
                     } else {
-                        appendBackendLog(ts() + " | [SYSTEM] Reset & Restart (Clean) failed: " + result.message());
-                        styleStatusLabel(connectionLabel, "Connection failed", COLOR_DANGER);
-                        if (result.portOwner() != null && result.portOwner().pid() != null) {
-                            showUnknownPortOwnerDialog(result.portOwner(), port);
-                        } else {
-                            JOptionPane.showMessageDialog(
-                                    frame,
-                                    "Reset & Restart (Clean) failed:\n" + result.message(),
-                                    "Reset Failed",
-                                    JOptionPane.WARNING_MESSAGE
-                            );
+                        appendBackendLog(ts() + " | [FAIL] Reset & Restart (Clean) failed: " + result.message());
+                        String tail = backendLogTail(8);
+                        if (!tail.isBlank()) {
+                            appendBackendLog(ts() + " | [SYSTEM] backend tail: " + tail);
                         }
+                        styleStatusLabel(connectionLabel, "Connection failed", COLOR_DANGER);
                     }
                 } catch (Exception ex) {
-                    appendBackendLog(ts() + " | [SYSTEM] Reset & Restart (Clean) failed: " + humanizeError(ex));
+                    appendBackendLog(ts() + " | [FAIL] Reset & Restart (Clean) failed: " + humanizeError(ex));
+                    String tail = backendLogTail(8);
+                    if (!tail.isBlank()) {
+                        appendBackendLog(ts() + " | [SYSTEM] backend tail: " + tail);
+                    }
                     styleStatusLabel(connectionLabel, "Connection failed", COLOR_DANGER);
-                    JOptionPane.showMessageDialog(
-                            frame,
-                            "Reset & Restart (Clean) failed:\n" + humanizeError(ex),
-                            "Reset Failed",
-                            JOptionPane.WARNING_MESSAGE
-                    );
                 } finally {
                     backendActionInFlight = false;
                     refreshBackendControls();
@@ -11139,15 +11116,13 @@ public final class DPolarisJavaApp {
             }
             return;
         }
-        PortOwnershipInfo ownership = detectPortOwnership(host, port);
-        if (ownership.listening() && ownership.pid() != null) {
-            String message = "Port is in use by PID " + ownership.pid()
-                    + "; cannot auto-start backend. Free the port or stop the external process.";
-            appendTrainingLog(ts() + " | " + message);
-            throw new RuntimeException(message);
-        }
         appendTrainingLog(ts() + " | Backend not healthy. Attempting auto-start...");
         try {
+            if (!killListeningPortOwnersWindows(host, port, 8000, "Training Auto-Start")) {
+                PortOwnershipInfo owner = detectPortOwnership(host, port);
+                throw new IOException("Port " + port + " is still occupied by PID "
+                        + firstNonBlank(owner.pidOrUnknown(), "unknown"));
+            }
             clearExternalBackendAttachment();
             backendController.start();
             boolean healthy = backendController.waitUntilHealthy(Duration.ofSeconds(20), Duration.ofMillis(500));
