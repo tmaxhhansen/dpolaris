@@ -115,14 +115,14 @@ public final class DPolarisJavaApp {
     private static final Color COLOR_LOG_BG = new Color(19, 20, 24);
     private static final Color COLOR_INPUT = new Color(49, 52, 62);
     private static final Color COLOR_MENU_ACTIVE = new Color(64, 86, 133);
-    private static final Color CONTROL_PRIMARY_BG = new Color(41, 129, 245);
-    private static final Color CONTROL_PRIMARY_BG_DISABLED = new Color(60, 79, 109);
-    private static final Color CONTROL_SECONDARY_BG = new Color(74, 79, 92);
-    private static final Color CONTROL_SECONDARY_BG_DISABLED = new Color(59, 62, 72);
-    private static final Color CONTROL_DANGER_BG = new Color(196, 70, 76);
-    private static final Color CONTROL_DANGER_BG_DISABLED = new Color(109, 63, 65);
+    private static final Color CONTROL_PRIMARY_BG = new Color(34, 108, 214);
+    private static final Color CONTROL_PRIMARY_BG_DISABLED = new Color(62, 67, 78);
+    private static final Color CONTROL_SECONDARY_BG = new Color(82, 90, 107);
+    private static final Color CONTROL_SECONDARY_BG_DISABLED = new Color(62, 67, 78);
+    private static final Color CONTROL_DANGER_BG = new Color(178, 58, 65);
+    private static final Color CONTROL_DANGER_BG_DISABLED = new Color(74, 60, 64);
     private static final Color CONTROL_TEXT_ENABLED = new Color(248, 250, 255);
-    private static final Color CONTROL_TEXT_DISABLED = new Color(219, 225, 238);
+    private static final Color CONTROL_TEXT_DISABLED = new Color(168, 176, 191);
     private static final Dimension CONTROL_BUTTON_SIZE = new Dimension(140, 34);
     private static final String VIEW_AI_MANAGEMENT = "AI_MANAGEMENT";
     private static final String VIEW_UNIVERSE_SCAN = "UNIVERSE_SCAN";
@@ -13084,17 +13084,47 @@ public final class DPolarisJavaApp {
         button.setMargin(new Insets(0, 12, 0, 12));
     }
 
+    private void applyDisabledStyle(JButton button, Color disabledBackground, Color disabledBorder) {
+        if (button == null) {
+            return;
+        }
+        button.setBackground(disabledBackground);
+        button.setForeground(CONTROL_TEXT_DISABLED);
+        button.setBorder(new CompoundBorder(
+                new LineBorder(disabledBorder, 1, true),
+                new EmptyBorder(7, 12, 7, 12)
+        ));
+    }
+
+    private void applyPrimaryButton(JButton button) {
+        styleControlButton(button, ButtonTone.PRIMARY);
+    }
+
+    private void applyDangerButton(JButton button) {
+        styleControlButton(button, ButtonTone.DANGER);
+    }
+
+    private void applyNeutralButton(JButton button) {
+        styleControlButton(button, ButtonTone.SECONDARY);
+    }
+
     private void styleActionButton(JButton button) {
         if (button == null) {
             return;
         }
         applyCommonButtonStyle(button);
-        Color enabledBg = new Color(96, 106, 128);
-        Color disabledBg = new Color(71, 78, 96);
-        button.setBackground(button.isEnabled() ? enabledBg : disabledBg);
-        button.setForeground(button.isEnabled() ? new Color(249, 251, 255) : CONTROL_TEXT_DISABLED);
+        Color enabledBg = new Color(82, 90, 107);
+        Color enabledBorder = new Color(168, 177, 196);
+        Color disabledBg = new Color(62, 67, 78);
+        Color disabledBorder = new Color(122, 130, 146);
+        if (!button.isEnabled()) {
+            applyDisabledStyle(button, disabledBg, disabledBorder);
+            return;
+        }
+        button.setBackground(enabledBg);
+        button.setForeground(CONTROL_TEXT_ENABLED);
         button.setBorder(new CompoundBorder(
-                new LineBorder(new Color(160, 171, 197), 1, true),
+                new LineBorder(enabledBorder, 1, true),
                 new EmptyBorder(7, 12, 7, 12)
         ));
     }
@@ -13115,14 +13145,25 @@ public final class DPolarisJavaApp {
         if (component == null) {
             return;
         }
+        Color bg = backgroundForStatusState(state);
+        Color border = borderForStatusState(state);
         if (component instanceof JLabel label) {
             label.setText(state);
             label.setFont(uiFont.deriveFont(Font.BOLD, 12f));
             label.setOpaque(true);
+            label.setHorizontalAlignment(JLabel.CENTER);
             label.setForeground(new Color(250, 251, 255));
-            label.setBackground(backgroundForStatusState(state));
+            label.setBackground(bg);
             label.setBorder(new CompoundBorder(
-                    new LineBorder(borderForStatusState(state), 1, true),
+                    new LineBorder(border, 1, true),
+                    new EmptyBorder(4, 10, 4, 10)
+            ));
+        } else {
+            component.setOpaque(true);
+            component.setForeground(new Color(250, 251, 255));
+            component.setBackground(bg);
+            component.setBorder(new CompoundBorder(
+                    new LineBorder(border, 1, true),
                     new EmptyBorder(4, 10, 4, 10)
             ));
         }
@@ -13131,35 +13172,35 @@ public final class DPolarisJavaApp {
     private Color backgroundForStatusState(String state) {
         String token = safeLower(state);
         if (token.contains("run") || token.contains("healthy") || token.contains("connect")) {
-            return new Color(46, 135, 83);
+            return new Color(40, 122, 74);
         }
         if (token.contains("error") || token.contains("fail") || token.contains("stop")) {
-            return new Color(173, 64, 69);
+            return new Color(163, 56, 63);
         }
-        return new Color(176, 123, 34);
+        return new Color(149, 104, 32);
     }
 
     private Color borderForStatusState(String state) {
         String token = safeLower(state);
         if (token.contains("run") || token.contains("healthy") || token.contains("connect")) {
-            return new Color(88, 178, 124);
+            return new Color(89, 170, 120);
         }
         if (token.contains("error") || token.contains("fail") || token.contains("stop")) {
-            return new Color(214, 112, 117);
+            return new Color(204, 102, 109);
         }
-        return new Color(226, 173, 80);
+        return new Color(200, 155, 75);
     }
 
     private void stylePrimary(JButton button) {
-        stylePrimaryButton(button);
+        applyPrimaryButton(button);
     }
 
     private void styleSecondary(JButton button) {
-        styleNeutralButton(button);
+        applyNeutralButton(button);
     }
 
     private void styleDanger(JButton button) {
-        styleDangerButton(button);
+        applyDangerButton(button);
     }
 
     private void applyBackendButtonState(JButton button, boolean enabled, ButtonTone tone) {
@@ -13180,32 +13221,39 @@ public final class DPolarisJavaApp {
         }
 
         Color enabledBg;
+        Color enabledBorder;
         Color disabledBg;
+        Color disabledBorder;
         switch (tone) {
             case PRIMARY -> {
                 enabledBg = CONTROL_PRIMARY_BG;
+                enabledBorder = new Color(141, 180, 242);
                 disabledBg = CONTROL_PRIMARY_BG_DISABLED;
+                disabledBorder = new Color(122, 130, 146);
             }
             case DANGER -> {
                 enabledBg = CONTROL_DANGER_BG;
+                enabledBorder = new Color(219, 116, 124);
                 disabledBg = CONTROL_DANGER_BG_DISABLED;
+                disabledBorder = new Color(122, 100, 107);
             }
             default -> {
                 enabledBg = CONTROL_SECONDARY_BG;
+                enabledBorder = new Color(168, 177, 196);
                 disabledBg = CONTROL_SECONDARY_BG_DISABLED;
+                disabledBorder = new Color(122, 130, 146);
             }
         }
 
         applyCommonButtonStyle(button);
-        button.setForeground(button.isEnabled() ? CONTROL_TEXT_ENABLED : CONTROL_TEXT_DISABLED);
-        button.setBackground(button.isEnabled() ? enabledBg : disabledBg);
-        Color borderColor = switch (tone) {
-            case PRIMARY -> new Color(144, 189, 255);
-            case DANGER -> new Color(226, 127, 136);
-            default -> new Color(160, 171, 197);
-        };
+        if (!button.isEnabled()) {
+            applyDisabledStyle(button, disabledBg, disabledBorder);
+            return;
+        }
+        button.setForeground(CONTROL_TEXT_ENABLED);
+        button.setBackground(enabledBg);
         button.setBorder(new CompoundBorder(
-                new LineBorder(borderColor, 1, true),
+                new LineBorder(enabledBorder, 1, true),
                 new EmptyBorder(7, 12, 7, 12)
         ));
     }
