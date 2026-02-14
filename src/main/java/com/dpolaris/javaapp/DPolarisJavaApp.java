@@ -17,6 +17,8 @@ import java.awt.GridBagLayout;
 import java.awt.Insets;
 import java.awt.Rectangle;
 import java.awt.RenderingHints;
+import java.awt.Toolkit;
+import java.awt.datatransfer.StringSelection;
 import java.awt.event.MouseAdapter;
 import java.awt.event.MouseEvent;
 import java.awt.event.WindowAdapter;
@@ -25,6 +27,12 @@ import java.io.BufferedReader;
 import java.io.File;
 import java.io.IOException;
 import java.io.InputStreamReader;
+import java.net.InetSocketAddress;
+import java.net.Socket;
+import java.net.URI;
+import java.net.http.HttpClient;
+import java.net.http.HttpRequest;
+import java.net.http.HttpResponse;
 import java.nio.charset.StandardCharsets;
 import java.nio.file.Files;
 import java.nio.file.Path;
@@ -50,6 +58,7 @@ import javax.swing.Box;
 import javax.swing.BoxLayout;
 import javax.swing.JButton;
 import javax.swing.JComboBox;
+import javax.swing.DefaultListModel;
 import javax.swing.DefaultListCellRenderer;
 import javax.swing.JComponent;
 import javax.swing.JDialog;
@@ -332,6 +341,18 @@ public final class DPolarisJavaApp {
     private Map<String, Object> universeNasdaqPayload = new LinkedHashMap<>();
     private Map<String, Object> universeWsbPayload = new LinkedHashMap<>();
     private Map<String, Object> universeCombinedPayload = new LinkedHashMap<>();
+    private JList<String> universeApiList;
+    private DefaultListModel<String> universeApiListModel;
+    private JTextField universeApiSearchField;
+    private JTextField universeApiSectorFilterField;
+    private JButton universeApiRefreshListButton;
+    private JLabel universeApiStatusLabel;
+    private JLabel universeApiMetaLabel;
+    private UniverseTableModel universeApiTableModel;
+    private JTable universeApiTable;
+    private TableRowSorter<UniverseTableModel> universeApiSorter;
+    private Map<String, Object> universeApiPayload = new LinkedHashMap<>();
+    private String universeApiActiveName;
 
     private JTextField scanRunIdField;
     private JButton scanLoadResultsButton;
@@ -367,6 +388,19 @@ public final class DPolarisJavaApp {
     private JLabel scanRunsStatusLabel;
     private JTable scanRunsTable;
     private ScanRunsTableModel scanRunsTableModel;
+    private JButton refreshOrchestratorStatusButton;
+    private JLabel orchestratorStatusValue;
+    private JButton doctorRunButton;
+    private JButton doctorCopyReportButton;
+    private JLabel doctorSummaryStatusLabel;
+    private JLabel doctorHealthStatusLabel;
+    private JLabel doctorBackendStatusLabel;
+    private JLabel doctorOrchestratorStatusLabel;
+    private JLabel doctorUniverseStatusLabel;
+    private JLabel doctorPortStatusLabel;
+    private JTextArea doctorReportArea;
+    private volatile SwingWorker<DoctorReport, Void> activeDoctorWorker;
+    private volatile String doctorLastReportText = "Doctor report has not been run yet.";
 
     private volatile SwingWorker<Void, String> activeTrainingWorker;
     private volatile boolean backendActionInFlight;
@@ -512,6 +546,7 @@ public final class DPolarisJavaApp {
 
         refreshTrainingControls();
         refreshBackendControls();
+        refreshOrchestratorStatus();
         showView(VIEW_AI_MANAGEMENT);
     }
 
@@ -578,6 +613,7 @@ public final class DPolarisJavaApp {
         tabs.addTab("Backend Control", createBackendControlPanel());
         tabs.addTab("Training", createTrainingPanel());
         tabs.addTab("Backend Data", createDataPanel());
+        tabs.addTab("Doctor", createDoctorPanel());
 
         JPanel wrap = new JPanel(new BorderLayout());
         wrap.setBackground(COLOR_BG);
@@ -588,6 +624,7 @@ public final class DPolarisJavaApp {
     private JPanel createUniverseScanPanel() {
         universeMainTabs = new JTabbedPane();
         styleTabbedPane(universeMainTabs);
+        universeMainTabs.addTab("Universe API", createUniverseApiPanel());
         universeMainTabs.addTab("Universe", createUniverseBrowserPanel());
         universeMainTabs.addTab("Scan Results", createScanResultsPanel());
         universeMainTabs.addTab("Runs", createScanRunsPanel());
@@ -779,6 +816,308 @@ public final class DPolarisJavaApp {
             table.getColumnModel().getColumn(0).setMaxWidth(72);
         }
         return scroll;
+    }
+
+    private JPanel createUniverseApiPanel() {
+        JPanel root = new JPanel(new BorderLayout(8, 8));
+        root.setBackground(COLOR_BG);
+
+        universeApiListModel = new DefaultListModel<>();
+        universeApiList = new JList<>(universeApiListModel);
+        universeApiList.setSelectionMode(ListSelectionModel.SINGLE_SELECTION);
+        universeApiList.setBackground(COLOR_LOG_BG);
+        universeApiList.setForeground(COLOR_TEXT);
+        universeApiList.setSelectionBackground(COLOR_MENU_ACTIVE);
+        universeApiList.setSelectionForeground(COLOR_TEXT);
+        universeApiList.setFont(uiFont);
+
+        universeApiSearchField = new JTextField(16);
+        universeApiSectorFilterField = new JTextField(12);
+        universeApiRefreshListButton = new JButton("Refresh List");
+        universeApiStatusLabel = new JLabel();
+        universeApiMetaLabel = new JLabel();
+
+        styleInputField(universeApiSearchField);
+        styleInputField(universeApiSectorFilterField);
+        styleButton(universeApiRefreshListButton, true);
+        styleInlineStatus(universeApiStatusLabel, "Universe API: idle", COLOR_MUTED);
+        styleInlineStatus(universeApiMetaLabel, "Rows: 0", COLOR_MUTED);
+
+        universeApiTableModel = new UniverseTableModel();
+        universeApiTable = new JTable(universeApiTableModel);
+        styleRunsTable(universeApiTable);
+        universeApiTable.setSelectionMode(ListSelectionModel.MULTIPLE_INTERVAL_SELECTION);
+        universeApiSorter = new TableRowSorter<>(universeApiTableModel);
+        universeApiTable.setRowSorter(universeApiSorter);
+
+        JPanel filters = new JPanel(new FlowLayout(FlowLayout.LEFT, 8, 0));
+        filters.setOpaque(false);
+        filters.add(createFormLabel("Search"));
+        filters.add(universeApiSearchField);
+        filters.add(createFormLabel("Sector"));
+        filters.add(universeApiSectorFilterField);
+        filters.add(universeApiRefreshListButton);
+        filters.add(universeApiStatusLabel);
+        filters.add(universeApiMetaLabel);
+
+        JPanel right = new JPanel(new BorderLayout(8, 8));
+        right.setOpaque(false);
+        right.add(filters, BorderLayout.NORTH);
+        right.add(createUniverseTablePane(universeApiTable, "Universe Symbols"), BorderLayout.CENTER);
+
+        JPanel leftHeader = new JPanel(new BorderLayout(8, 0));
+        leftHeader.setOpaque(false);
+        leftHeader.add(createSectionHeader("Universe Names"), BorderLayout.CENTER);
+        JButton reloadLeftButton = new JButton("Reload");
+        styleButton(reloadLeftButton, false);
+        leftHeader.add(reloadLeftButton, BorderLayout.EAST);
+
+        JScrollPane universeNamesScroll = new JScrollPane(universeApiList);
+        universeNamesScroll.getViewport().setBackground(COLOR_LOG_BG);
+        universeNamesScroll.setBorder(new CompoundBorder(
+                new LineBorder(COLOR_BORDER, 1, true),
+                new EmptyBorder(4, 4, 4, 4)
+        ));
+
+        JPanel left = createCardPanel();
+        left.add(leftHeader, BorderLayout.NORTH);
+        left.add(universeNamesScroll, BorderLayout.CENTER);
+        left.setPreferredSize(new Dimension(260, 10));
+
+        JSplitPane split = new JSplitPane(JSplitPane.HORIZONTAL_SPLIT, left, right);
+        split.setResizeWeight(0.2);
+        split.setDividerLocation(260);
+        split.setBorder(BorderFactory.createEmptyBorder());
+
+        universeApiList.addListSelectionListener(e -> {
+            if (!e.getValueIsAdjusting()) {
+                String selected = universeApiList.getSelectedValue();
+                if (selected != null && !selected.isBlank()) {
+                    loadUniverseApi(selected);
+                }
+            }
+        });
+        universeApiRefreshListButton.addActionListener(e -> refreshUniverseApiList());
+        reloadLeftButton.addActionListener(e -> refreshUniverseApiList());
+        universeApiSearchField.getDocument().addDocumentListener(new DocumentListener() {
+            @Override
+            public void insertUpdate(DocumentEvent e) {
+                applyUniverseApiFilters();
+            }
+
+            @Override
+            public void removeUpdate(DocumentEvent e) {
+                applyUniverseApiFilters();
+            }
+
+            @Override
+            public void changedUpdate(DocumentEvent e) {
+                applyUniverseApiFilters();
+            }
+        });
+        universeApiSectorFilterField.getDocument().addDocumentListener(new DocumentListener() {
+            @Override
+            public void insertUpdate(DocumentEvent e) {
+                applyUniverseApiFilters();
+            }
+
+            @Override
+            public void removeUpdate(DocumentEvent e) {
+                applyUniverseApiFilters();
+            }
+
+            @Override
+            public void changedUpdate(DocumentEvent e) {
+                applyUniverseApiFilters();
+            }
+        });
+
+        root.add(split, BorderLayout.CENTER);
+        refreshUniverseApiList();
+        return root;
+    }
+
+    private void refreshUniverseApiList() {
+        configureClientFromUI();
+        if (universeApiRefreshListButton != null) {
+            universeApiRefreshListButton.setEnabled(false);
+        }
+        styleInlineStatus(universeApiStatusLabel, "Universe API: loading list...", COLOR_WARNING);
+
+        SwingWorker<List<String>, Void> worker = new SwingWorker<>() {
+            @Override
+            protected List<String> doInBackground() throws Exception {
+                Object response = apiClient.fetchUniverseList();
+                return parseUniverseApiNames(response);
+            }
+
+            @Override
+            protected void done() {
+                if (universeApiRefreshListButton != null) {
+                    universeApiRefreshListButton.setEnabled(true);
+                }
+                try {
+                    List<String> names = get();
+                    universeApiListModel.clear();
+                    for (String name : names) {
+                        universeApiListModel.addElement(name);
+                    }
+                    if (names.isEmpty()) {
+                        styleInlineStatus(universeApiStatusLabel, "Universe API: no universes returned", COLOR_WARNING);
+                        universeApiTableModel.setRows(List.of());
+                        styleInlineStatus(universeApiMetaLabel, "Rows: 0", COLOR_MUTED);
+                        return;
+                    }
+                    styleInlineStatus(universeApiStatusLabel, "Universe API: loaded " + names.size() + " universes", COLOR_SUCCESS);
+                    if (universeApiActiveName != null && names.contains(universeApiActiveName)) {
+                        universeApiList.setSelectedValue(universeApiActiveName, true);
+                    } else {
+                        universeApiList.setSelectedIndex(0);
+                    }
+                } catch (Exception ex) {
+                    styleInlineStatus(universeApiStatusLabel, "Universe API: list failed", COLOR_DANGER);
+                    appendBackendLog(ts() + " | Universe list fetch failed: " + humanizeError(ex));
+                }
+            }
+        };
+        worker.execute();
+    }
+
+    private void loadUniverseApi(String universeName) {
+        configureClientFromUI();
+        universeApiActiveName = universeName;
+        styleInlineStatus(universeApiStatusLabel, "Universe API: loading " + universeName + "...", COLOR_WARNING);
+
+        SwingWorker<Map<String, Object>, Void> worker = new SwingWorker<>() {
+            @Override
+            protected Map<String, Object> doInBackground() throws Exception {
+                Object response = apiClient.fetchUniverseByName(universeName);
+                return normalizeUniverseApiPayload(response);
+            }
+
+            @Override
+            protected void done() {
+                try {
+                    Map<String, Object> payload = get();
+                    universeApiPayload = payload;
+                    List<UniverseRow> rows = parseUniverseRows(payload);
+                    universeApiTableModel.setRows(rows);
+                    applyUniverseApiFilters();
+
+                    String generatedAt = firstNonBlank(stringOrEmpty(findAnyValue(payload, "generated_at", "updated_at")), "n/a");
+                    styleInlineStatus(
+                            universeApiStatusLabel,
+                            "Universe API: " + universeName + " loaded (" + rows.size() + " symbols)",
+                            COLOR_SUCCESS
+                    );
+                    styleInlineStatus(universeApiMetaLabel, "Rows: " + rows.size() + " | Updated: " + generatedAt, COLOR_MUTED);
+                } catch (Exception ex) {
+                    styleInlineStatus(universeApiStatusLabel, "Universe API: load failed", COLOR_DANGER);
+                    styleInlineStatus(universeApiMetaLabel, "Rows: 0", COLOR_MUTED);
+                    appendBackendLog(ts() + " | Universe fetch failed [" + universeName + "]: " + humanizeError(ex));
+                }
+            }
+        };
+        worker.execute();
+    }
+
+    private void applyUniverseApiFilters() {
+        if (universeApiTableModel == null || universeApiSorter == null || universeApiTable == null) {
+            return;
+        }
+        String search = universeApiSearchField == null ? "" : universeApiSearchField.getText().trim().toLowerCase();
+        String sector = universeApiSectorFilterField == null ? "" : universeApiSectorFilterField.getText().trim().toLowerCase();
+        universeApiSorter.setRowFilter(new RowFilter<>() {
+            @Override
+            public boolean include(Entry<? extends UniverseTableModel, ? extends Integer> entry) {
+                UniverseRow row = universeApiTableModel.getRow(entry.getIdentifier());
+                if (row == null) {
+                    return false;
+                }
+                if (!search.isEmpty()) {
+                    String text = (row.ticker() + " " + row.name()).toLowerCase();
+                    if (!text.contains(search)) {
+                        return false;
+                    }
+                }
+                if (!sector.isEmpty() && !row.sector().toLowerCase().contains(sector)) {
+                    return false;
+                }
+                return true;
+            }
+        });
+        styleInlineStatus(
+                universeApiMetaLabel,
+                "Rows: " + universeApiTable.getRowCount() + " / " + universeApiTableModel.getRowCount(),
+                COLOR_MUTED
+        );
+    }
+
+    private List<String> parseUniverseApiNames(Object response) {
+        LinkedHashSet<String> out = new LinkedHashSet<>();
+        if (response instanceof List<?> list) {
+            for (Object item : list) {
+                String name = stringOrEmpty(item).trim();
+                if (!name.isEmpty()) {
+                    out.add(name);
+                }
+            }
+            return new ArrayList<>(out);
+        }
+        if (!(response instanceof Map<?, ?> mapRaw)) {
+            return new ArrayList<>(out);
+        }
+
+        Map<String, Object> map = Json.asObject(mapRaw);
+        Object names = firstNonNull(
+                findAnyValue(map, "universes", "names", "list", "items", "data"),
+                map.get("universes")
+        );
+        if (names instanceof List<?> list) {
+            for (Object item : list) {
+                if (item instanceof Map<?, ?> itemMapRaw) {
+                    Map<String, Object> itemMap = Json.asObject(itemMapRaw);
+                    String name = firstNonBlank(
+                            stringOrEmpty(findAnyValue(itemMap, "name", "id", "universe", "key")),
+                            stringOrEmpty(item)
+                    );
+                    if (!name.isBlank()) {
+                        out.add(name);
+                    }
+                } else {
+                    String name = stringOrEmpty(item).trim();
+                    if (!name.isEmpty()) {
+                        out.add(name);
+                    }
+                }
+            }
+        }
+        return new ArrayList<>(out);
+    }
+
+    private Map<String, Object> normalizeUniverseApiPayload(Object response) {
+        if (response instanceof List<?> list) {
+            Map<String, Object> wrapper = new LinkedHashMap<>();
+            wrapper.put("symbols", list);
+            return wrapper;
+        }
+        if (!(response instanceof Map<?, ?> mapRaw)) {
+            return new LinkedHashMap<>();
+        }
+        Map<String, Object> map = Json.asObject(mapRaw);
+        Object nested = firstNonNull(
+                findAnyValue(map, "universe", "item", "data"),
+                map
+        );
+        if (nested instanceof Map<?, ?> nestedMapRaw) {
+            return Json.asObject(nestedMapRaw);
+        }
+        if (nested instanceof List<?> nestedList) {
+            Map<String, Object> wrapper = new LinkedHashMap<>();
+            wrapper.put("symbols", nestedList);
+            return wrapper;
+        }
+        return map;
     }
 
     private JPanel createScanResultsPanel() {
@@ -7689,6 +8028,9 @@ public final class DPolarisJavaApp {
         styleNavButtonState(navTrainingRunsButton, VIEW_TRAINING_RUNS.equals(viewId));
         styleNavButtonState(navPredictionInspectorButton, VIEW_PREDICTION_INSPECTOR.equals(viewId));
         if (VIEW_UNIVERSE_SCAN.equals(viewId)) {
+            if (universeApiListModel != null && universeApiListModel.isEmpty()) {
+                refreshUniverseApiList();
+            }
             ensureUniverseLoaded(false);
             if (scanRunsTableModel != null && scanRunsTableModel.getRowCount() == 0) {
                 loadScanRuns(false);
@@ -7712,8 +8054,10 @@ public final class DPolarisJavaApp {
         startDaemonButton = new JButton("Start Daemon");
         stopDaemonButton = new JButton("Stop Daemon");
         clearBackendLogsButton = new JButton("Clear Logs");
+        refreshOrchestratorStatusButton = new JButton("Refresh Orchestrator");
         backendStatusValue = new JLabel();
         daemonStatusValue = new JLabel();
+        orchestratorStatusValue = new JLabel();
 
         styleInputField(backendPathField);
         backendPathField.setEditable(false);
@@ -7724,8 +8068,10 @@ public final class DPolarisJavaApp {
         stylePrimary(startDaemonButton);
         styleDanger(stopDaemonButton);
         styleSecondary(clearBackendLogsButton);
+        styleButton(refreshOrchestratorStatusButton, false);
         styleInlineStatus(backendStatusValue, "STOPPED", COLOR_MUTED);
         styleInlineStatus(daemonStatusValue, "Scheduler: unknown", COLOR_MUTED);
+        styleInlineStatus(orchestratorStatusValue, "Orchestrator: unknown", COLOR_MUTED);
 
         clearBackendLogsButton.addActionListener(e -> {
             synchronized (backendLogBuffer) {
@@ -7762,6 +8108,13 @@ public final class DPolarisJavaApp {
         daemonActions.add(clearBackendLogsButton);
         daemonActions.add(daemonStatusValue);
 
+        JPanel orchestratorActions = new JPanel(new FlowLayout(FlowLayout.LEFT, 10, 6));
+        orchestratorActions.setOpaque(false);
+        orchestratorActions.setMinimumSize(new Dimension(10, 46));
+        orchestratorActions.setPreferredSize(new Dimension(10, 46));
+        orchestratorActions.add(refreshOrchestratorStatusButton);
+        orchestratorActions.add(orchestratorStatusValue);
+
         JPanel controlsBody = new JPanel(new GridBagLayout());
         controlsBody.setOpaque(false);
         GridBagConstraints gbc = new GridBagConstraints();
@@ -7786,6 +8139,10 @@ public final class DPolarisJavaApp {
 
         gbc.gridy++;
         gbc.insets = new Insets(2, 0, 0, 0);
+        controlsBody.add(orchestratorActions, gbc);
+
+        gbc.gridy++;
+        gbc.insets = new Insets(2, 0, 0, 0);
         controlsBody.add(noteLabel, gbc);
 
         JPanel controlsCard = createCardPanel();
@@ -7794,6 +8151,7 @@ public final class DPolarisJavaApp {
 
         backendLogArea = createLogArea();
         JScrollPane logs = createLogScrollPane(backendLogArea, "Backend Activity (select + copy supported)");
+        refreshOrchestratorStatusButton.addActionListener(e -> refreshOrchestratorStatus());
 
         root.add(controlsCard, BorderLayout.NORTH);
         root.add(logs, BorderLayout.CENTER);
@@ -7967,6 +8325,513 @@ public final class DPolarisJavaApp {
         root.add(actionsCard, BorderLayout.NORTH);
         root.add(split, BorderLayout.CENTER);
         return root;
+    }
+
+    private JPanel createDoctorPanel() {
+        JPanel root = new JPanel(new BorderLayout(8, 8));
+        root.setBackground(COLOR_BG);
+        root.setBorder(new EmptyBorder(8, 0, 0, 0));
+
+        doctorRunButton = new JButton("Run Doctor");
+        doctorCopyReportButton = new JButton("Copy Report");
+        doctorSummaryStatusLabel = new JLabel();
+        doctorHealthStatusLabel = new JLabel();
+        doctorBackendStatusLabel = new JLabel();
+        doctorOrchestratorStatusLabel = new JLabel();
+        doctorUniverseStatusLabel = new JLabel();
+        doctorPortStatusLabel = new JLabel();
+
+        styleButton(doctorRunButton, true);
+        styleButton(doctorCopyReportButton, false);
+        styleInlineStatus(doctorSummaryStatusLabel, "Doctor: idle", COLOR_MUTED);
+        styleInlineStatus(doctorHealthStatusLabel, "1) Backend health: pending", COLOR_MUTED);
+        styleInlineStatus(doctorBackendStatusLabel, "2) Backend status: pending", COLOR_MUTED);
+        styleInlineStatus(doctorOrchestratorStatusLabel, "3) Orchestrator status: pending", COLOR_MUTED);
+        styleInlineStatus(doctorUniverseStatusLabel, "4) Universe endpoints: pending", COLOR_MUTED);
+        styleInlineStatus(doctorPortStatusLabel, "5) Port check: pending", COLOR_MUTED);
+
+        JPanel actionRow = new JPanel(new FlowLayout(FlowLayout.LEFT, 8, 0));
+        actionRow.setOpaque(false);
+        actionRow.add(doctorRunButton);
+        actionRow.add(doctorCopyReportButton);
+        actionRow.add(doctorSummaryStatusLabel);
+
+        JPanel checklist = new JPanel();
+        checklist.setOpaque(false);
+        checklist.setLayout(new BoxLayout(checklist, BoxLayout.Y_AXIS));
+        checklist.add(doctorHealthStatusLabel);
+        checklist.add(Box.createVerticalStrut(6));
+        checklist.add(doctorBackendStatusLabel);
+        checklist.add(Box.createVerticalStrut(6));
+        checklist.add(doctorOrchestratorStatusLabel);
+        checklist.add(Box.createVerticalStrut(6));
+        checklist.add(doctorUniverseStatusLabel);
+        checklist.add(Box.createVerticalStrut(6));
+        checklist.add(doctorPortStatusLabel);
+
+        JPanel topCard = createCardPanel();
+        topCard.add(createSectionHeader("Doctor Diagnostics"), BorderLayout.NORTH);
+        JPanel topBody = new JPanel(new BorderLayout(0, 8));
+        topBody.setOpaque(false);
+        topBody.add(actionRow, BorderLayout.NORTH);
+        topBody.add(checklist, BorderLayout.CENTER);
+        topCard.add(topBody, BorderLayout.CENTER);
+
+        doctorReportArea = createLogArea();
+        doctorReportArea.setLineWrap(true);
+        doctorReportArea.setWrapStyleWord(true);
+        doctorReportArea.setText("Run Doctor to generate a diagnostics report.");
+        JScrollPane reportScroll = createLogScrollPane(doctorReportArea, "Doctor Report");
+
+        doctorRunButton.addActionListener(e -> runDoctorChecks());
+        doctorCopyReportButton.addActionListener(e -> copyDoctorReportToClipboard());
+
+        root.add(topCard, BorderLayout.NORTH);
+        root.add(reportScroll, BorderLayout.CENTER);
+        return root;
+    }
+
+    private void runDoctorChecks() {
+        if (activeDoctorWorker != null && !activeDoctorWorker.isDone()) {
+            return;
+        }
+
+        configureClientFromUI();
+        if (doctorRunButton != null) {
+            doctorRunButton.setEnabled(false);
+        }
+        styleInlineStatus(doctorSummaryStatusLabel, "Doctor: running...", COLOR_WARNING);
+        styleInlineStatus(doctorHealthStatusLabel, "1) Backend health: running...", COLOR_WARNING);
+        styleInlineStatus(doctorBackendStatusLabel, "2) Backend status: waiting...", COLOR_MUTED);
+        styleInlineStatus(doctorOrchestratorStatusLabel, "3) Orchestrator status: waiting...", COLOR_MUTED);
+        styleInlineStatus(doctorUniverseStatusLabel, "4) Universe endpoints: waiting...", COLOR_MUTED);
+        styleInlineStatus(doctorPortStatusLabel, "5) Port check: waiting...", COLOR_MUTED);
+        if (doctorReportArea != null) {
+            doctorReportArea.setText(ts() + " | Running Doctor diagnostics...\n");
+        }
+
+        String host = hostField == null ? "127.0.0.1" : hostField.getText().trim();
+        if (host.isBlank()) {
+            host = "127.0.0.1";
+        }
+        int port = currentPort();
+        String finalHost = host;
+
+        activeDoctorWorker = new SwingWorker<>() {
+            @Override
+            protected DoctorReport doInBackground() {
+                return runDoctorDiagnostics(finalHost, port);
+            }
+
+            @Override
+            protected void done() {
+                if (doctorRunButton != null) {
+                    doctorRunButton.setEnabled(true);
+                }
+                try {
+                    DoctorReport report = get();
+                    doctorLastReportText = report.reportText();
+                    if (doctorReportArea != null) {
+                        doctorReportArea.setText(report.reportText());
+                        doctorReportArea.setCaretPosition(0);
+                    }
+                    updateDoctorCheckLabel(doctorHealthStatusLabel, "1) Backend health", report.health());
+                    updateDoctorCheckLabel(doctorBackendStatusLabel, "2) Backend status", report.backendStatus());
+                    updateDoctorCheckLabel(doctorOrchestratorStatusLabel, "3) Orchestrator status", report.orchestratorStatus());
+                    updateDoctorCheckLabel(doctorUniverseStatusLabel, "4) Universe endpoints", report.universeStatus());
+                    updateDoctorCheckLabel(doctorPortStatusLabel, "5) Port check", report.portCheck());
+
+                    int failCount = report.failCount();
+                    int warnCount = report.warnCount();
+                    Color color = failCount > 0 ? COLOR_DANGER : (warnCount > 0 ? COLOR_WARNING : COLOR_SUCCESS);
+                    String summary = "Doctor: "
+                            + report.passCount() + " pass, "
+                            + warnCount + " warn, "
+                            + failCount + " fail";
+                    styleInlineStatus(doctorSummaryStatusLabel, summary, color);
+                } catch (Exception ex) {
+                    styleInlineStatus(doctorSummaryStatusLabel, "Doctor: failed", COLOR_DANGER);
+                    if (doctorReportArea != null) {
+                        doctorReportArea.setText(ts() + " | Doctor failed: " + humanizeError(ex));
+                    }
+                }
+            }
+        };
+        activeDoctorWorker.execute();
+    }
+
+    private DoctorReport runDoctorDiagnostics(String host, int port) {
+        List<DoctorCheckResult> checks = new ArrayList<>();
+
+        DoctorHttpResult healthHttp = doctorGet(host, port, "/health", 10);
+        DoctorCheckResult healthCheck = evaluateHealthCheck(healthHttp);
+        checks.add(healthCheck);
+
+        DoctorHttpResult statusHttp = doctorGet(host, port, "/api/status", 15);
+        DoctorCheckResult backendStatusCheck = evaluateBackendStatusCheck(statusHttp);
+        checks.add(backendStatusCheck);
+
+        DoctorCheckResult orchestratorCheck = evaluateOrchestratorCheck(host, port);
+        checks.add(orchestratorCheck);
+
+        DoctorCheckResult universeCheck = evaluateUniverseCheck(host, port);
+        checks.add(universeCheck);
+
+        DoctorCheckResult portCheck = evaluatePortCheck(host, port, healthCheck.state());
+        checks.add(portCheck);
+
+        int pass = 0;
+        int warn = 0;
+        int fail = 0;
+        for (DoctorCheckResult check : checks) {
+            if (check.state() == DoctorState.PASS) {
+                pass++;
+            } else if (check.state() == DoctorState.WARN) {
+                warn++;
+            } else {
+                fail++;
+            }
+        }
+
+        String reportText = formatDoctorReport(host, port, checks, pass, warn, fail);
+        return new DoctorReport(
+                checks.get(0),
+                checks.get(1),
+                checks.get(2),
+                checks.get(3),
+                checks.get(4),
+                pass,
+                warn,
+                fail,
+                reportText
+        );
+    }
+
+    private DoctorCheckResult evaluateHealthCheck(DoctorHttpResult result) {
+        if (!result.ok()) {
+            return new DoctorCheckResult(
+                    DoctorState.FAIL,
+                    "FAIL | " + result.errorSummary() + " | " + result.elapsedMs() + " ms",
+                    "GET /health failed: " + result.errorSummary()
+            );
+        }
+        String statusText = "unknown";
+        if (result.parsedBody() instanceof Map<?, ?> mapRaw) {
+            Map<String, Object> map = Json.asObject(mapRaw);
+            statusText = firstNonBlank(stringOrEmpty(findAnyValue(map, "status", "state")), "unknown");
+        }
+        boolean healthy = safeLower(statusText).contains("healthy");
+        DoctorState state = healthy ? DoctorState.PASS : DoctorState.FAIL;
+        return new DoctorCheckResult(
+                state,
+                (healthy ? "PASS" : "FAIL") + " | status=" + statusText + " | " + result.elapsedMs() + " ms",
+                "HTTP " + result.statusCode() + " in " + result.elapsedMs() + " ms"
+        );
+    }
+
+    private DoctorCheckResult evaluateBackendStatusCheck(DoctorHttpResult result) {
+        if (!result.ok()) {
+            return new DoctorCheckResult(
+                    DoctorState.FAIL,
+                    "FAIL | " + result.errorSummary(),
+                    "GET /api/status failed: " + result.errorSummary()
+            );
+        }
+        Map<String, Object> status = result.parsedBody() instanceof Map<?, ?> mapRaw
+                ? Json.asObject(mapRaw)
+                : new LinkedHashMap<>();
+
+        Object llmEnabled = findAnyValue(status, "llm_enabled", "llmEnabled", "ai_enabled");
+        Object llmProvider = findAnyValue(status, "llm_provider", "llmProvider", "provider");
+        List<String> versions = collectVersionFields(status);
+        String versionSummary = versions.isEmpty() ? "version=n/a" : String.join(", ", versions);
+
+        String summary = "PASS | llm_enabled=" + stringOrEmpty(llmEnabled)
+                + " | llm_provider=" + firstNonBlank(stringOrEmpty(llmProvider), "n/a");
+        return new DoctorCheckResult(
+                DoctorState.PASS,
+                summary,
+                "HTTP " + result.statusCode() + " | " + versionSummary
+        );
+    }
+
+    private DoctorCheckResult evaluateOrchestratorCheck(String host, int port) {
+        DoctorHttpResult primary = doctorGet(host, port, "/api/orchestrator/status", 12);
+        if (primary.ok()) {
+            String state = summarizeRunningState(primary.parsedBody());
+            return new DoctorCheckResult(
+                    DoctorState.PASS,
+                    "PASS | /api/orchestrator/status | " + state,
+                    "HTTP " + primary.statusCode() + " in " + primary.elapsedMs() + " ms"
+            );
+        }
+
+        if (primary.statusCode() == 404) {
+            DoctorHttpResult fallback = doctorGet(host, port, "/api/scheduler/status", 12);
+            if (fallback.ok()) {
+                String state = summarizeRunningState(fallback.parsedBody());
+                DoctorState checkState = safeLower(state).contains("run") ? DoctorState.PASS : DoctorState.WARN;
+                return new DoctorCheckResult(
+                        checkState,
+                        (checkState == DoctorState.PASS ? "PASS" : "WARN")
+                                + " | fallback /api/scheduler/status | " + state,
+                        "Primary 404, fallback HTTP " + fallback.statusCode()
+                );
+            }
+            return new DoctorCheckResult(
+                    DoctorState.FAIL,
+                    "FAIL | primary 404, fallback failed",
+                    "Fallback /api/scheduler/status failed: " + fallback.errorSummary()
+            );
+        }
+
+        return new DoctorCheckResult(
+                DoctorState.FAIL,
+                "FAIL | " + primary.errorSummary(),
+                "GET /api/orchestrator/status failed: " + primary.errorSummary()
+        );
+    }
+
+    private DoctorCheckResult evaluateUniverseCheck(String host, int port) {
+        DoctorHttpResult listResult = doctorGet(host, port, "/api/universe/list", 12);
+        if (listResult.statusCode() == 404) {
+            return new DoctorCheckResult(
+                    DoctorState.WARN,
+                    "WARN | /api/universe/list not implemented (404)",
+                    "Universe endpoints are optional"
+            );
+        }
+        if (!listResult.ok()) {
+            return new DoctorCheckResult(
+                    DoctorState.FAIL,
+                    "FAIL | /api/universe/list " + listResult.errorSummary(),
+                    "GET /api/universe/list failed"
+            );
+        }
+
+        DoctorHttpResult allResult = doctorGet(host, port, "/api/universe/all", 20);
+        if (allResult.statusCode() == 404) {
+            return new DoctorCheckResult(
+                    DoctorState.WARN,
+                    "WARN | /api/universe/all not implemented (404)",
+                    "Universe list is available, all-symbol endpoint is optional"
+            );
+        }
+        if (!allResult.ok()) {
+            return new DoctorCheckResult(
+                    DoctorState.FAIL,
+                    "FAIL | /api/universe/all " + allResult.errorSummary(),
+                    "GET /api/universe/all failed"
+            );
+        }
+
+        int symbolCount = countUniverseSymbols(allResult.parsedBody());
+        return new DoctorCheckResult(
+                DoctorState.PASS,
+                "PASS | symbols=" + symbolCount,
+                "Universe list/all endpoints reachable"
+        );
+    }
+
+    private DoctorCheckResult evaluatePortCheck(String host, int port, DoctorState healthState) {
+        if (healthState == DoctorState.PASS) {
+            return new DoctorCheckResult(
+                    DoctorState.WARN,
+                    "WARN | skipped (health passed)",
+                    "TCP probe runs only when /health fails"
+            );
+        }
+
+        long started = System.nanoTime();
+        try (Socket socket = new Socket()) {
+            socket.connect(new InetSocketAddress(host, port), 2000);
+            long elapsed = Duration.ofNanos(System.nanoTime() - started).toMillis();
+            return new DoctorCheckResult(
+                    DoctorState.PASS,
+                    "PASS | reachable | " + elapsed + " ms",
+                    "TCP connect succeeded to " + host + ":" + port
+            );
+        } catch (IOException ex) {
+            long elapsed = Duration.ofNanos(System.nanoTime() - started).toMillis();
+            return new DoctorCheckResult(
+                    DoctorState.FAIL,
+                    "FAIL | unreachable | " + elapsed + " ms",
+                    "TCP connect failed: " + ex.getMessage()
+            );
+        }
+    }
+
+    private DoctorHttpResult doctorGet(String host, int port, String path, int timeoutSeconds) {
+        HttpClient client = HttpClient.newBuilder()
+                .connectTimeout(Duration.ofSeconds(Math.max(2, timeoutSeconds)))
+                .build();
+        long started = System.nanoTime();
+        try {
+            URI uri = URI.create("http://" + host + ":" + port + path);
+            HttpRequest request = HttpRequest.newBuilder(uri)
+                    .timeout(Duration.ofSeconds(Math.max(2, timeoutSeconds)))
+                    .GET()
+                    .build();
+            HttpResponse<String> response = client.send(request, HttpResponse.BodyHandlers.ofString());
+            long elapsedMs = Duration.ofNanos(System.nanoTime() - started).toMillis();
+            String body = response.body() == null ? "" : response.body();
+            Object parsed;
+            try {
+                parsed = body.isBlank() ? new LinkedHashMap<String, Object>() : Json.parse(body);
+            } catch (RuntimeException ignored) {
+                parsed = body;
+            }
+            return new DoctorHttpResult(response.statusCode(), body, parsed, elapsedMs, null);
+        } catch (Exception ex) {
+            long elapsedMs = Duration.ofNanos(System.nanoTime() - started).toMillis();
+            return new DoctorHttpResult(-1, "", null, elapsedMs, ex);
+        }
+    }
+
+    private List<String> collectVersionFields(Map<String, Object> status) {
+        List<String> out = new ArrayList<>();
+        for (Map.Entry<String, Object> entry : status.entrySet()) {
+            String key = entry.getKey();
+            if (key != null && safeLower(key).contains("version")) {
+                out.add(key + "=" + stringOrEmpty(entry.getValue()));
+            }
+        }
+        return out;
+    }
+
+    private int countUniverseSymbols(Object payload) {
+        if (payload instanceof List<?> list) {
+            return list.size();
+        }
+        if (!(payload instanceof Map<?, ?> mapRaw)) {
+            return 0;
+        }
+        Map<String, Object> map = Json.asObject(mapRaw);
+        Object candidate = firstNonNull(
+                findAnyValue(map, "symbols", "tickers", "items", "data", "universe"),
+                map.get("symbols")
+        );
+        if (candidate instanceof List<?> list) {
+            return list.size();
+        }
+        if (candidate instanceof Map<?, ?> nestedRaw) {
+            Map<String, Object> nested = Json.asObject(nestedRaw);
+            Object nestedList = findAnyValue(nested, "symbols", "tickers", "items", "data");
+            if (nestedList instanceof List<?> list) {
+                return list.size();
+            }
+        }
+        return 0;
+    }
+
+    private String summarizeRunningState(Object payload) {
+        if (!(payload instanceof Map<?, ?> mapRaw)) {
+            return "status=unknown";
+        }
+        Map<String, Object> map = Json.asObject(mapRaw);
+        Object runningValue = findAnyValue(map, "running", "active", "is_running", "daemon_running");
+        String stateText = firstNonBlank(
+                stringOrEmpty(findAnyValue(map, "status", "state")),
+                stringOrEmpty(runningValue)
+        );
+        return firstNonBlank(stateText, "unknown");
+    }
+
+    private void updateDoctorCheckLabel(JLabel label, String title, DoctorCheckResult result) {
+        if (label == null || result == null) {
+            return;
+        }
+        Color color = switch (result.state()) {
+            case PASS -> COLOR_SUCCESS;
+            case WARN -> COLOR_WARNING;
+            case FAIL -> COLOR_DANGER;
+        };
+        styleInlineStatus(label, title + ": " + result.summary(), color);
+    }
+
+    private String formatDoctorReport(
+            String host,
+            int port,
+            List<DoctorCheckResult> checks,
+            int pass,
+            int warn,
+            int fail
+    ) {
+        StringBuilder sb = new StringBuilder();
+        sb.append("dPolaris Doctor Report\n");
+        sb.append("Timestamp: ").append(ts()).append('\n');
+        sb.append("Target: ").append(host).append(':').append(port).append('\n');
+        sb.append("Summary: ").append(pass).append(" pass, ")
+                .append(warn).append(" warn, ")
+                .append(fail).append(" fail\n\n");
+        for (int i = 0; i < checks.size(); i++) {
+            DoctorCheckResult check = checks.get(i);
+            sb.append(i + 1).append(") ").append(check.summary()).append('\n');
+            sb.append("   ").append(check.detail()).append('\n');
+        }
+        return sb.toString();
+    }
+
+    private void copyDoctorReportToClipboard() {
+        String text = doctorLastReportText == null ? "" : doctorLastReportText;
+        if (text.isBlank()) {
+            return;
+        }
+        try {
+            Toolkit.getDefaultToolkit().getSystemClipboard().setContents(new StringSelection(text), null);
+            styleInlineStatus(doctorSummaryStatusLabel, "Doctor: report copied", COLOR_SUCCESS);
+        } catch (Exception ex) {
+            styleInlineStatus(doctorSummaryStatusLabel, "Doctor: copy failed", COLOR_DANGER);
+        }
+    }
+
+    private enum DoctorState {
+        PASS,
+        WARN,
+        FAIL
+    }
+
+    private record DoctorCheckResult(
+            DoctorState state,
+            String summary,
+            String detail
+    ) {
+    }
+
+    private record DoctorReport(
+            DoctorCheckResult health,
+            DoctorCheckResult backendStatus,
+            DoctorCheckResult orchestratorStatus,
+            DoctorCheckResult universeStatus,
+            DoctorCheckResult portCheck,
+            int passCount,
+            int warnCount,
+            int failCount,
+            String reportText
+    ) {
+    }
+
+    private record DoctorHttpResult(
+            int statusCode,
+            String body,
+            Object parsedBody,
+            long elapsedMs,
+            Exception error
+    ) {
+        boolean ok() {
+            return statusCode >= 200 && statusCode < 300;
+        }
+
+        String errorSummary() {
+            if (error == null) {
+                return "HTTP " + statusCode;
+            }
+            String message = error.getMessage();
+            if (message == null || message.isBlank()) {
+                return error.getClass().getSimpleName();
+            }
+            return message;
+        }
     }
 
     private JTextArea createLogArea() {
@@ -8371,6 +9236,7 @@ public final class DPolarisJavaApp {
                 }
                 if (connected) {
                     styleStatusLabel(connectionLabel, "Connected", COLOR_SUCCESS);
+                    refreshOrchestratorStatus();
                 } else {
                     styleStatusLabel(connectionLabel, "Connection failed", COLOR_DANGER);
                 }
@@ -8432,6 +9298,7 @@ public final class DPolarisJavaApp {
         applyBackendButtonState(startDaemonButton, !actionInFlight && !starting, ButtonTone.PRIMARY);
         applyBackendButtonState(stopDaemonButton, !actionInFlight && !starting, ButtonTone.DANGER);
         applyBackendButtonState(clearBackendLogsButton, true, ButtonTone.SECONDARY);
+        applyBackendButtonState(refreshOrchestratorStatusButton, !actionInFlight, ButtonTone.SECONDARY);
 
         if (backendStatusValue == null) {
             return;
@@ -8623,10 +9490,64 @@ public final class DPolarisJavaApp {
                     appendBackendLog(Json.pretty(response));
                     setDaemonStatus(start ? "Scheduler: running" : "Scheduler: stopped",
                             start ? COLOR_SUCCESS : COLOR_MUTED);
+                    refreshOrchestratorStatus();
                 } catch (Exception ex) {
                     appendBackendLog(ts() + " | Daemon " + (start ? "start" : "stop") + " failed: "
                             + ex.getMessage());
                     setDaemonStatus("Scheduler: error", COLOR_DANGER);
+                }
+            }
+        };
+        worker.execute();
+    }
+
+    private void refreshOrchestratorStatus() {
+        if (refreshOrchestratorStatusButton != null) {
+            refreshOrchestratorStatusButton.setEnabled(false);
+        }
+        configureClientFromUI();
+        setOrchestratorStatus("Orchestrator: checking...", COLOR_WARNING);
+        SwingWorker<Map<String, Object>, Void> worker = new SwingWorker<>() {
+            @Override
+            protected Map<String, Object> doInBackground() throws Exception {
+                return apiClient.fetchOrchestratorStatus();
+            }
+
+            @Override
+            protected void done() {
+                if (refreshOrchestratorStatusButton != null) {
+                    refreshOrchestratorStatusButton.setEnabled(true);
+                }
+                try {
+                    Map<String, Object> status = get();
+                    Object runningValue = findAnyValue(status, "running", "is_running", "active", "daemon_running");
+                    String stateText = firstNonBlank(
+                            stringOrEmpty(findAnyValue(status, "status", "state")),
+                            stringOrEmpty(runningValue)
+                    );
+                    String normalized = safeLower(stateText);
+
+                    boolean running = false;
+                    if (runningValue instanceof Boolean b) {
+                        running = b;
+                    } else if (runningValue instanceof Number number) {
+                        running = number.intValue() != 0;
+                    } else if (runningValue != null) {
+                        String token = safeLower(String.valueOf(runningValue));
+                        running = token.contains("run") || token.equals("true") || token.equals("1");
+                    }
+                    if (!running) {
+                        running = normalized.contains("run");
+                    }
+
+                    String label = running ? "Orchestrator: running" : "Orchestrator: stopped";
+                    if (!normalized.isBlank() && !normalized.equals("true") && !normalized.equals("false")) {
+                        label = "Orchestrator: " + stateText;
+                    }
+                    setOrchestratorStatus(label, running ? COLOR_SUCCESS : COLOR_MUTED);
+                } catch (Exception ex) {
+                    setOrchestratorStatus("Orchestrator: unavailable", COLOR_DANGER);
+                    appendBackendLog(ts() + " | Orchestrator status check failed: " + humanizeError(ex));
                 }
             }
         };
@@ -9632,6 +10553,14 @@ public final class DPolarisJavaApp {
         SwingUtilities.invokeLater(() -> {
             if (daemonStatusValue != null) {
                 styleInlineStatus(daemonStatusValue, text, color);
+            }
+        });
+    }
+
+    private void setOrchestratorStatus(String text, Color color) {
+        SwingUtilities.invokeLater(() -> {
+            if (orchestratorStatusValue != null) {
+                styleInlineStatus(orchestratorStatusValue, text, color);
             }
         });
     }
