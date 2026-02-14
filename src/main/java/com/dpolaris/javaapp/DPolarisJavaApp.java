@@ -67,6 +67,9 @@ import javax.swing.JFrame;
 import javax.swing.JCheckBox;
 import javax.swing.JList;
 import javax.swing.JLabel;
+import javax.swing.JMenu;
+import javax.swing.JMenuBar;
+import javax.swing.JMenuItem;
 import javax.swing.JOptionPane;
 import javax.swing.JPanel;
 import javax.swing.JProgressBar;
@@ -159,6 +162,7 @@ public final class DPolarisJavaApp {
     private JButton startDaemonButton;
     private JButton stopDaemonButton;
     private JButton clearBackendLogsButton;
+    private JButton resetRestartCleanButton;
     private JLabel backendStatusValue;
     private JLabel daemonStatusValue;
     private JTextArea backendLogArea;
@@ -483,6 +487,7 @@ public final class DPolarisJavaApp {
         frame.setMinimumSize(new Dimension(1000, 700));
         frame.setLayout(new BorderLayout(8, 8));
         frame.getContentPane().setBackground(COLOR_BG);
+        frame.setJMenuBar(createMainMenuBar());
 
         JPanel topPanel = new JPanel(new BorderLayout(10, 0));
         topPanel.setBackground(COLOR_CARD);
@@ -633,6 +638,17 @@ public final class DPolarisJavaApp {
         content.add(buttonPanel, BorderLayout.CENTER);
         menu.add(content, BorderLayout.CENTER);
         return menu;
+    }
+
+    private JMenuBar createMainMenuBar() {
+        JMenuBar menuBar = new JMenuBar();
+        JMenu tools = new JMenu("Tools");
+        JMenuItem cleanReset = new JMenuItem("Reset & Restart (Clean)");
+        cleanReset.setToolTipText("Stops backend/daemon/orchestrator, clears stale pid files, then starts backend.");
+        cleanReset.addActionListener(e -> resetAndRestartClean());
+        tools.add(cleanReset);
+        menuBar.add(tools);
+        return menuBar;
     }
 
     private JPanel createAiManagementPanel() {
@@ -8083,6 +8099,7 @@ public final class DPolarisJavaApp {
         startDaemonButton = new JButton("Start Daemon");
         stopDaemonButton = new JButton("Stop Daemon");
         clearBackendLogsButton = new JButton("Clear Logs");
+        resetRestartCleanButton = new JButton("Reset & Restart (Clean)");
         refreshOrchestratorStatusButton = new JButton("Refresh Orchestrator");
         backendStatusValue = new JLabel();
         daemonStatusValue = new JLabel();
@@ -8097,7 +8114,11 @@ public final class DPolarisJavaApp {
         stylePrimary(startDaemonButton);
         styleDanger(stopDaemonButton);
         styleSecondary(clearBackendLogsButton);
+        styleDanger(resetRestartCleanButton);
         styleNeutralButton(refreshOrchestratorStatusButton);
+        resetRestartCleanButton.setToolTipText(
+                "Stops backend/daemon/orchestrator, clears stale pid files, then starts backend and waits for /health."
+        );
         styleStatusPill(backendStatusValue, "STOPPED");
         styleStatusPill(daemonStatusValue, "Scheduler: unknown");
         styleStatusPill(orchestratorStatusValue, "Orchestrator: unknown");
@@ -8125,6 +8146,7 @@ public final class DPolarisJavaApp {
         runtimeActions.add(startBackendButton);
         runtimeActions.add(stopBackendButton);
         runtimeActions.add(restartBackendButton);
+        runtimeActions.add(resetRestartCleanButton);
         runtimeActions.add(saveBackendLogsButton);
         runtimeActions.add(backendStatusValue);
 
@@ -8181,6 +8203,7 @@ public final class DPolarisJavaApp {
         backendLogArea = createLogArea();
         JScrollPane logs = createLogScrollPane(backendLogArea, "Backend Activity (select + copy supported)");
         refreshOrchestratorStatusButton.addActionListener(e -> refreshOrchestratorStatus());
+        resetRestartCleanButton.addActionListener(e -> resetAndRestartClean());
 
         root.add(controlsCard, BorderLayout.NORTH);
         root.add(logs, BorderLayout.CENTER);
@@ -9511,6 +9534,20 @@ public final class DPolarisJavaApp {
         }
     }
 
+    private record CleanResetResult(
+            boolean success,
+            String message,
+            PortOwnershipInfo portOwner
+    ) {
+        static CleanResetResult successResult() {
+            return new CleanResetResult(true, "", null);
+        }
+
+        static CleanResetResult failureResult(String message, PortOwnershipInfo owner) {
+            return new CleanResetResult(false, message == null ? "Unknown failure" : message, owner);
+        }
+    }
+
     private JTextArea createLogArea() {
         JTextArea area = new JTextArea();
         area.setEditable(false);
@@ -10012,6 +10049,7 @@ public final class DPolarisJavaApp {
         applyBackendButtonState(startBackendButton, !actionInFlight && !starting && !running, ButtonTone.PRIMARY);
         applyBackendButtonState(stopBackendButton, !actionInFlight && (starting || running || errored), ButtonTone.DANGER);
         applyBackendButtonState(restartBackendButton, !actionInFlight && !starting, ButtonTone.SECONDARY);
+        applyBackendButtonState(resetRestartCleanButton, !actionInFlight && !starting, ButtonTone.DANGER);
         applyBackendButtonState(saveBackendLogsButton, !backendLogBuffer.isEmpty(), ButtonTone.SECONDARY);
         applyBackendButtonState(startDaemonButton, !actionInFlight && !starting, ButtonTone.PRIMARY);
         applyBackendButtonState(stopDaemonButton, !actionInFlight && !starting, ButtonTone.DANGER);
@@ -10213,6 +10251,203 @@ public final class DPolarisJavaApp {
             }
         };
         worker.execute();
+    }
+
+    private void resetAndRestartClean() {
+        if (backendActionInFlight) {
+            appendBackendLog(ts() + " | [SYSTEM] Reset ignored: backend action already in progress.");
+            return;
+        }
+        configureClientFromUI();
+        String host = currentHost();
+        int port = currentPort();
+
+        backendActionInFlight = true;
+        refreshBackendControls();
+        appendBackendLog(ts() + " | [SYSTEM] Reset & Restart (Clean) requested.");
+
+        SwingWorker<CleanResetResult, Void> worker = new SwingWorker<>() {
+            @Override
+            protected CleanResetResult doInBackground() {
+                Long managedPid = backendController.managedPid();
+                try {
+                    appendBackendLog(ts() + " | [SYSTEM] [1/7] Attempting orchestrator/scheduler stop.");
+                    boolean backendReachable = quickHealthCheck(host, port, 1200);
+                    if (backendReachable) {
+                        try {
+                            Map<String, Object> payload = apiClient.stopOrchestratorIfSupported();
+                            appendBackendLog(ts() + " | [SYSTEM] Orchestrator/scheduler stop response: " + Json.compact(payload));
+                        } catch (Exception ex) {
+                            appendBackendLog(ts() + " | [SYSTEM] Orchestrator stop endpoint unavailable: " + humanizeError(ex));
+                        }
+                    } else {
+                        appendBackendLog(ts() + " | [SYSTEM] Backend unreachable; skipping orchestrator API stop.");
+                    }
+
+                    appendBackendLog(ts() + " | [SYSTEM] [2/7] Attempting daemon stop.");
+                    if (backendReachable) {
+                        try {
+                            Map<String, Object> daemonStop = apiClient.stopDaemon();
+                            appendBackendLog(ts() + " | [SYSTEM] Daemon stop response: " + Json.compact(daemonStop));
+                        } catch (Exception ex) {
+                            appendBackendLog(ts() + " | [SYSTEM] Daemon stop skipped/failed: " + humanizeError(ex));
+                        }
+                    }
+
+                    appendBackendLog(ts() + " | [SYSTEM] [3/7] Stopping managed backend process.");
+                    backendController.stop();
+                    clearExternalBackendAttachment();
+
+                    appendBackendLog(ts() + " | [SYSTEM] [4/7] Clearing stale runtime files.");
+                    clearStaleRuntimeFiles();
+
+                    appendBackendLog(ts() + " | [SYSTEM] [5/7] Checking port ownership.");
+                    PortOwnershipInfo ownership = detectPortOwnership(host, port);
+                    if (ownership.listening() && ownership.pid() != null) {
+                        if (managedPid != null && ownership.pid().longValue() == managedPid.longValue()) {
+                            appendBackendLog(ts() + " | [SYSTEM] Port still owned by managed PID "
+                                    + managedPid + "; forcing termination.");
+                            boolean killed = killProcessByPid(ownership.pid());
+                            if (!killed) {
+                                return CleanResetResult.failureResult(
+                                        "Failed to terminate managed PID " + managedPid + " on port " + port + ".",
+                                        ownership
+                                );
+                            }
+                            ownership = detectPortOwnership(host, port);
+                            if (ownership.listening()) {
+                                return CleanResetResult.failureResult(
+                                        "Port " + port + " remains in use after managed PID termination.",
+                                        ownership
+                                );
+                            }
+                        } else {
+                            String msg = "Port is in use by PID " + ownership.pid()
+                                    + "; cannot start backend. Unknown owner will not be killed automatically.";
+                            appendBackendLog(ts() + " | [SYSTEM] WARN: " + msg);
+                            return CleanResetResult.failureResult(msg, ownership);
+                        }
+                    }
+
+                    appendBackendLog(ts() + " | [SYSTEM] [6/7] Starting backend cleanly.");
+                    backendController.start();
+
+                    appendBackendLog(ts() + " | [SYSTEM] [7/7] Waiting for /health (30s timeout).");
+                    boolean healthy = backendController.waitUntilHealthy(Duration.ofSeconds(30), Duration.ofMillis(500));
+                    if (!healthy) {
+                        backendController.stop();
+                        return CleanResetResult.failureResult("Backend failed to become healthy within 30 seconds.", null);
+                    }
+
+                    return CleanResetResult.successResult();
+                } catch (Exception ex) {
+                    return CleanResetResult.failureResult(humanizeError(ex), null);
+                }
+            }
+
+            @Override
+            protected void done() {
+                try {
+                    CleanResetResult result = get();
+                    if (result.success()) {
+                        appendBackendLog(ts() + " | [SYSTEM] Reset & Restart (Clean) completed successfully.");
+                        styleStatusLabel(connectionLabel, "Connected", COLOR_SUCCESS);
+                    } else {
+                        appendBackendLog(ts() + " | [SYSTEM] Reset & Restart (Clean) failed: " + result.message());
+                        styleStatusLabel(connectionLabel, "Connection failed", COLOR_DANGER);
+                        if (result.portOwner() != null && result.portOwner().pid() != null) {
+                            showUnknownPortOwnerDialog(result.portOwner(), port);
+                        } else {
+                            JOptionPane.showMessageDialog(
+                                    frame,
+                                    "Reset & Restart (Clean) failed:\n" + result.message(),
+                                    "Reset Failed",
+                                    JOptionPane.WARNING_MESSAGE
+                            );
+                        }
+                    }
+                } catch (Exception ex) {
+                    appendBackendLog(ts() + " | [SYSTEM] Reset & Restart (Clean) failed: " + humanizeError(ex));
+                    styleStatusLabel(connectionLabel, "Connection failed", COLOR_DANGER);
+                    JOptionPane.showMessageDialog(
+                            frame,
+                            "Reset & Restart (Clean) failed:\n" + humanizeError(ex),
+                            "Reset Failed",
+                            JOptionPane.WARNING_MESSAGE
+                    );
+                } finally {
+                    backendActionInFlight = false;
+                    refreshBackendControls();
+                    checkConnection();
+                }
+            }
+        };
+        worker.execute();
+    }
+
+    private void clearStaleRuntimeFiles() {
+        Path runDir = Path.of(System.getProperty("user.home"), "dpolaris_data", "run");
+        List<Path> stalePaths = List.of(
+                runDir.resolve("backend.pid"),
+                runDir.resolve("orchestrator.pid"),
+                runDir.resolve("orchestrator.heartbeat.json")
+        );
+        for (Path path : stalePaths) {
+            try {
+                if (Files.deleteIfExists(path)) {
+                    appendBackendLog(ts() + " | [SYSTEM] Removed stale file: " + path);
+                }
+            } catch (Exception ex) {
+                appendBackendLog(ts() + " | [SYSTEM] Failed removing stale file " + path + ": " + humanizeError(ex));
+            }
+        }
+    }
+
+    private boolean killProcessByPid(int pid) {
+        if (pid <= 0) {
+            return false;
+        }
+        if (isWindows()) {
+            CommandExecResult result = runCommand(
+                    List.of("cmd", "/c", "taskkill /PID " + pid + " /F"),
+                    8000
+            );
+            if (result.exitCode() == 0) {
+                appendBackendLog(ts() + " | [SYSTEM] taskkill succeeded for PID " + pid);
+                return true;
+            }
+            appendBackendLog(ts() + " | [SYSTEM] taskkill failed for PID " + pid + ": " + result.stderrOrStdout());
+            return false;
+        }
+        ProcessHandle.of(pid).ifPresent(ProcessHandle::destroyForcibly);
+        return !ProcessHandle.of(pid).map(ProcessHandle::isAlive).orElse(false);
+    }
+
+    private void showUnknownPortOwnerDialog(PortOwnershipInfo owner, int port) {
+        if (owner == null || owner.pid() == null) {
+            return;
+        }
+        String killCmd = "taskkill /PID " + owner.pid() + " /F";
+        String details = "Port " + port + " is in use by PID " + owner.pid() + ".\n\n"
+                + "Command line:\n"
+                + firstNonBlank(owner.commandLine(), "(unavailable)") + "\n\n"
+                + "Suggested command:\n" + killCmd + "\n\n"
+                + "Unknown processes are not killed automatically.";
+        Object[] options = {"Copy Kill Command", "Close"};
+        int selected = JOptionPane.showOptionDialog(
+                frame,
+                details,
+                "Port In Use",
+                JOptionPane.DEFAULT_OPTION,
+                JOptionPane.WARNING_MESSAGE,
+                null,
+                options,
+                options[1]
+        );
+        if (selected == 0) {
+            Toolkit.getDefaultToolkit().getSystemClipboard().setContents(new StringSelection(killCmd), null);
+            appendBackendLog(ts() + " | [SYSTEM] Copied kill command to clipboard: " + killCmd);
+        }
     }
 
     private void saveBackendLogs() {

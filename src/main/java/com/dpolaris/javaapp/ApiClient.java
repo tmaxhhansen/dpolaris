@@ -366,6 +366,21 @@ final class ApiClient {
         return Json.asObject(response);
     }
 
+    Map<String, Object> stopOrchestratorIfSupported() throws IOException, InterruptedException {
+        Object response = requestWithFallback(
+                "POST",
+                List.of(
+                        "/api/orchestrator/stop",
+                        "/orchestrator/stop",
+                        "/api/scheduler/stop",
+                        "/scheduler/stop"
+                ),
+                "{}",
+                30
+        );
+        return Json.asObject(response);
+    }
+
     Map<String, Object> runSchedulerJob(String jobId) throws IOException, InterruptedException {
         Object response = requestWithFallback(
                 "POST",

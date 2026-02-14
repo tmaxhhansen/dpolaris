@@ -123,6 +123,18 @@ final class BackendController {
         return current != null && current.isAlive();
     }
 
+    Long managedPid() {
+        Process current = process;
+        if (current == null) {
+            return null;
+        }
+        try {
+            return current.pid();
+        } catch (Exception ignored) {
+            return null;
+        }
+    }
+
     boolean isHealthy() {
         try {
             HttpURLConnection conn = (HttpURLConnection) new URL(HEALTH_URL).openConnection();
