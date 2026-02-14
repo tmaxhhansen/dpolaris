@@ -1017,14 +1017,12 @@ public final class DPolarisJavaApp {
                         universeApiListModel.addElement(name);
                     }
                     if (!listError.isBlank()) {
-                        String fallbackUniverse = "nasdaq100";
                         String message = isUniverseListUnsupported(listError)
                                 ? "Backend does not support /api/universe/list yet."
-                                : "Universe list endpoint unavailable. Trying fallback universe '" + fallbackUniverse + "'.";
+                                : "Universe list endpoint unavailable. Trying fallback universe endpoints.";
                         styleInlineStatus(universeApiStatusLabel, message, COLOR_WARNING);
                         logUniverseListFailureDebounced("Universe list fetch failed: " + listError);
-                        appendBackendLog(ts() + " | [WARN] Universe list fallback -> /api/scan/universe?name=" + fallbackUniverse);
-                        loadUniverseApi(fallbackUniverse);
+                        loadUniverseApiFallbackSequence(List.of("all", "nasdaq100", "sp500"));
                         return;
                     }
                     if (names.isEmpty()) {
@@ -1079,13 +1077,7 @@ public final class DPolarisJavaApp {
         SwingWorker<Map<String, Object>, Void> worker = new SwingWorker<>() {
             @Override
             protected Map<String, Object> doInBackground() throws Exception {
-                try {
-                    Object response = apiClient.fetchUniverseByName(universeName);
-                    return normalizeUniverseApiPayload(response);
-                } catch (Exception primaryError) {
-                    Object fallback = apiClient.fetchUniverse(universeName);
-                    return normalizeUniverseApiPayload(fallback);
-                }
+                return fetchUniversePayload(universeName);
             }
 
             @Override
@@ -1112,6 +1104,83 @@ public final class DPolarisJavaApp {
             }
         };
         worker.execute();
+    }
+
+    private void loadUniverseApiFallbackSequence(List<String> candidates) {
+        List<String> orderedCandidates = candidates == null ? List.of() : candidates.stream()
+                .map(this::stringOrEmpty)
+                .map(String::trim)
+                .filter(s -> !s.isEmpty())
+                .distinct()
+                .toList();
+        if (orderedCandidates.isEmpty()) {
+            orderedCandidates = List.of("all", "nasdaq100", "sp500");
+        }
+        final List<String> tryNames = orderedCandidates;
+        styleInlineStatus(
+                universeApiStatusLabel,
+                "Backend does not support /api/universe/list yet. Trying fallback universes...",
+                COLOR_WARNING
+        );
+        SwingWorker<UniverseFallbackResult, Void> worker = new SwingWorker<>() {
+            @Override
+            protected UniverseFallbackResult doInBackground() {
+                List<String> errors = new ArrayList<>();
+                for (String candidate : tryNames) {
+                    appendBackendLog(ts() + " | [WARN] Universe list fallback -> /api/scan/universe?name=" + candidate);
+                    try {
+                        Map<String, Object> payload = fetchUniversePayload(candidate);
+                        return UniverseFallbackResult.success(candidate, payload);
+                    } catch (Exception ex) {
+                        errors.add(candidate + ": " + humanizeError(ex));
+                    }
+                }
+                return UniverseFallbackResult.failure(String.join(" | ", errors));
+            }
+
+            @Override
+            protected void done() {
+                try {
+                    UniverseFallbackResult result = get();
+                    if (!result.success()) {
+                        styleInlineStatus(universeApiStatusLabel, "Universe API: load failed", COLOR_DANGER);
+                        styleInlineStatus(universeApiMetaLabel, "Rows: 0", COLOR_MUTED);
+                        appendBackendLog(ts() + " | [WARN] Universe fallback failed: " + result.errorMessage());
+                        return;
+                    }
+                    universeApiActiveName = result.loadedName();
+                    universeApiPayload = result.payload();
+                    List<UniverseRow> rows = parseUniverseRows(result.payload());
+                    universeApiTableModel.setRows(rows);
+                    applyUniverseApiFilters();
+                    String generatedAt = firstNonBlank(
+                            stringOrEmpty(findAnyValue(result.payload(), "generated_at", "updated_at")),
+                            "n/a"
+                    );
+                    styleInlineStatus(
+                            universeApiStatusLabel,
+                            "Universe API fallback loaded '" + result.loadedName() + "' (" + rows.size() + " symbols)",
+                            COLOR_WARNING
+                    );
+                    styleInlineStatus(universeApiMetaLabel, "Rows: " + rows.size() + " | Updated: " + generatedAt, COLOR_MUTED);
+                } catch (Exception ex) {
+                    styleInlineStatus(universeApiStatusLabel, "Universe API: load failed", COLOR_DANGER);
+                    styleInlineStatus(universeApiMetaLabel, "Rows: 0", COLOR_MUTED);
+                    appendBackendLog(ts() + " | [WARN] Universe fallback failed: " + humanizeError(ex));
+                }
+            }
+        };
+        worker.execute();
+    }
+
+    private Map<String, Object> fetchUniversePayload(String universeName) throws Exception {
+        try {
+            Object response = apiClient.fetchUniverseByName(universeName);
+            return normalizeUniverseApiPayload(response);
+        } catch (Exception primaryError) {
+            Object fallback = apiClient.fetchUniverse(universeName);
+            return normalizeUniverseApiPayload(fallback);
+        }
     }
 
     private void applyUniverseApiFilters() {
@@ -10530,9 +10599,7 @@ public final class DPolarisJavaApp {
         if (cmd.isBlank()) {
             return false;
         }
-        return cmd.contains("\\dpolaris_ai\\.venv\\scripts\\python.exe")
-                && cmd.contains("cli.main")
-                && cmd.contains("server");
+        return cmd.contains("\\dpolaris_ai\\.venv\\scripts\\python.exe");
     }
 
     private boolean waitForHealthyStability(String host, int port, int holdMs) {
@@ -10592,7 +10659,7 @@ public final class DPolarisJavaApp {
         }
         if (isWindows()) {
             CommandExecResult result = runCommand(
-                    List.of("cmd", "/c", "taskkill /PID " + pid + " /F"),
+                    List.of("cmd", "/c", "taskkill /PID " + pid + " /T /F"),
                     8000
             );
             if (result.exitCode() == 0) {
@@ -10610,7 +10677,7 @@ public final class DPolarisJavaApp {
         if (owner == null || owner.pid() == null) {
             return;
         }
-        String killCmd = "taskkill /PID " + owner.pid() + " /F";
+        String killCmd = "taskkill /PID " + owner.pid() + " /T /F";
         String details = "Port " + port + " is in use by PID " + owner.pid() + ".\n\n"
                 + "Command line:\n"
                 + firstNonBlank(owner.commandLine(), "(unavailable)") + "\n\n"
@@ -13517,8 +13584,9 @@ public final class DPolarisJavaApp {
         if (button == null) {
             return;
         }
+        Color disabledText = pickTextColorForBackground(disabledBackground);
         button.setBackground(disabledBackground);
-        button.setForeground(pickTextColorForBackground(disabledBackground));
+        button.setForeground(disabledText);
         button.setBorder(new CompoundBorder(
                 new LineBorder(disabledBorder, 1, true),
                 new EmptyBorder(7, 12, 7, 12)
@@ -13720,5 +13788,16 @@ public final class DPolarisJavaApp {
     @FunctionalInterface
     private interface FetchTask {
         Object fetch() throws Exception;
+    }
+
+    private record UniverseFallbackResult(boolean success, String loadedName, Map<String, Object> payload, String errorMessage) {
+        static UniverseFallbackResult success(String loadedName, Map<String, Object> payload) {
+            return new UniverseFallbackResult(true, loadedName, payload, "");
+        }
+
+        static UniverseFallbackResult failure(String errorMessage) {
+            String safeError = (errorMessage == null || errorMessage.isBlank()) ? "unknown error" : errorMessage;
+            return new UniverseFallbackResult(false, "", new LinkedHashMap<>(), safeError);
+        }
     }
 }
