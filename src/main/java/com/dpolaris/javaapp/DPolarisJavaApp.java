@@ -360,6 +360,8 @@ public final class DPolarisJavaApp {
     private TableRowSorter<UniverseTableModel> universeApiSorter;
     private Map<String, Object> universeApiPayload = new LinkedHashMap<>();
     private String universeApiActiveName;
+    private String universeListLastErrorSignature = "";
+    private long universeListLastErrorAtMs = 0L;
 
     private JTextField scanRunIdField;
     private JButton scanLoadResultsButton;
@@ -990,10 +992,17 @@ public final class DPolarisJavaApp {
         styleInlineStatus(universeApiStatusLabel, "Universe API: loading list...", COLOR_WARNING);
 
         SwingWorker<List<String>, Void> worker = new SwingWorker<>() {
+            private String listError = "";
+
             @Override
             protected List<String> doInBackground() throws Exception {
-                Object response = apiClient.fetchUniverseList();
-                return parseUniverseApiNames(response);
+                try {
+                    Object response = apiClient.fetchUniverseList();
+                    return parseUniverseApiNames(response);
+                } catch (Exception ex) {
+                    listError = humanizeError(ex);
+                    return List.of();
+                }
             }
 
             @Override
@@ -1007,8 +1016,19 @@ public final class DPolarisJavaApp {
                     for (String name : names) {
                         universeApiListModel.addElement(name);
                     }
+                    if (!listError.isBlank()) {
+                        String message = "Universe list endpoint unavailable. Trying fallback universe 'all'.";
+                        styleInlineStatus(universeApiStatusLabel, message, COLOR_WARNING);
+                        logUniverseListFailureDebounced("Universe list fetch failed: " + listError);
+                        loadUniverseApi("all");
+                        return;
+                    }
                     if (names.isEmpty()) {
-                        styleInlineStatus(universeApiStatusLabel, "Universe API: no universes returned", COLOR_WARNING);
+                        styleInlineStatus(
+                                universeApiStatusLabel,
+                                "No universe files found. Add files under dpolaris_ai/universe/.",
+                                COLOR_WARNING
+                        );
                         universeApiTableModel.setRows(List.of());
                         styleInlineStatus(universeApiMetaLabel, "Rows: 0", COLOR_MUTED);
                         return;
@@ -1021,11 +1041,23 @@ public final class DPolarisJavaApp {
                     }
                 } catch (Exception ex) {
                     styleInlineStatus(universeApiStatusLabel, "Universe API: list failed", COLOR_DANGER);
-                    appendBackendLog(ts() + " | Universe list fetch failed: " + humanizeError(ex));
+                    logUniverseListFailureDebounced("Universe list fetch failed: " + humanizeError(ex));
+                    loadUniverseApi("all");
                 }
             }
         };
         worker.execute();
+    }
+
+    private void logUniverseListFailureDebounced(String message) {
+        String signature = firstNonBlank(message, "unknown");
+        long now = System.currentTimeMillis();
+        if (signature.equals(universeListLastErrorSignature) && (now - universeListLastErrorAtMs) < 20_000L) {
+            return;
+        }
+        universeListLastErrorSignature = signature;
+        universeListLastErrorAtMs = now;
+        appendBackendLog(ts() + " | " + signature);
     }
 
     private void loadUniverseApi(String universeName) {
@@ -1036,8 +1068,13 @@ public final class DPolarisJavaApp {
         SwingWorker<Map<String, Object>, Void> worker = new SwingWorker<>() {
             @Override
             protected Map<String, Object> doInBackground() throws Exception {
-                Object response = apiClient.fetchUniverseByName(universeName);
-                return normalizeUniverseApiPayload(response);
+                try {
+                    Object response = apiClient.fetchUniverseByName(universeName);
+                    return normalizeUniverseApiPayload(response);
+                } catch (Exception primaryError) {
+                    Object fallback = apiClient.fetchUniverse(universeName);
+                    return normalizeUniverseApiPayload(fallback);
+                }
             }
 
             @Override
@@ -9858,6 +9895,17 @@ public final class DPolarisJavaApp {
         }
     }
 
+    private Color pickTextColorForBackground(Color background) {
+        if (background == null) {
+            return COLOR_TEXT;
+        }
+        double r = background.getRed() / 255.0;
+        double g = background.getGreen() / 255.0;
+        double b = background.getBlue() / 255.0;
+        double luminance = 0.2126 * r + 0.7152 * g + 0.0722 * b;
+        return luminance < 0.56 ? Color.WHITE : new Color(22, 25, 32);
+    }
+
     private void styleStatusLabel(JLabel label, String text, Color accentColor) {
         // Keep signature for compatibility, but enforce high-contrast pill styling.
         styleStatusPill(label, text);
@@ -10123,10 +10171,19 @@ public final class DPolarisJavaApp {
                         }
                         styleStatusLabel(connectionLabel, "Connected", COLOR_SUCCESS);
                     } else if (result.blockedByPort()) {
-                        String warning = "Port is in use by PID " + result.portOwnerPid()
-                                + "; cannot start backend. Use Stop Backend or free the port.";
+                        String warning = "Port in use; backend may be running externally (PID "
+                                + result.portOwnerPid() + ").";
                         appendBackendLog(ts() + " | [WARN] " + warning);
+                        if (!result.portOwnerCommand().isBlank()) {
+                            appendBackendLog(ts() + " | [WARN] Owner command: " + truncateForDetail(result.portOwnerCommand()));
+                        }
                         styleStatusLabel(connectionLabel, "Port conflict on " + host + ":" + port, COLOR_WARNING);
+                        JOptionPane.showMessageDialog(
+                                frame,
+                                warning + "\nUse Reset & Restart (Clean) to recover safely.",
+                                "Backend Port In Use",
+                                JOptionPane.WARNING_MESSAGE
+                        );
                     } else {
                         appendBackendLog(ts() + " | [SYSTEM] Backend is healthy.");
                         styleStatusLabel(connectionLabel, "Connected", COLOR_SUCCESS);
@@ -10301,7 +10358,15 @@ public final class DPolarisJavaApp {
                     appendBackendLog(ts() + " | [SYSTEM] [4/7] Clearing stale runtime files.");
                     clearStaleRuntimeFiles();
 
-                    appendBackendLog(ts() + " | [SYSTEM] [5/7] Checking port ownership.");
+                    appendBackendLog(ts() + " | [SYSTEM] [5/7] Re-checking /health before restart.");
+                    if (quickHealthCheck(host, port, 1200)) {
+                        PortOwnershipInfo owner = detectPortOwnership(host, port);
+                        attachExternalBackend(owner.pid() == null ? null : owner);
+                        appendBackendLog(ts() + " | [SYSTEM] Backend already healthy after cleanup; reusing existing server.");
+                        return CleanResetResult.successResult();
+                    }
+
+                    appendBackendLog(ts() + " | [SYSTEM] [6/7] Checking port ownership.");
                     PortOwnershipInfo ownership = detectPortOwnership(host, port);
                     if (ownership.listening() && ownership.pid() != null) {
                         appendBackendLog(ts() + " | [SYSTEM] Detected LISTENING owner on "
@@ -10343,10 +10408,10 @@ public final class DPolarisJavaApp {
                         }
                     }
 
-                    appendBackendLog(ts() + " | [SYSTEM] [6/7] Starting backend cleanly.");
+                    appendBackendLog(ts() + " | [SYSTEM] [7/7] Starting backend cleanly.");
                     backendController.start();
 
-                    appendBackendLog(ts() + " | [SYSTEM] [7/7] Waiting for /health (30s timeout).");
+                    appendBackendLog(ts() + " | [SYSTEM] [8/8] Waiting for /health (30s timeout).");
                     boolean healthy = backendController.waitUntilHealthy(Duration.ofSeconds(30), Duration.ofMillis(500));
                     if (!healthy) {
                         backendController.stop();
@@ -13413,7 +13478,7 @@ public final class DPolarisJavaApp {
             return;
         }
         button.setBackground(enabledBg);
-        button.setForeground(CONTROL_TEXT_ENABLED);
+        button.setForeground(pickTextColorForBackground(enabledBg));
         button.setBorder(new CompoundBorder(
                 new LineBorder(enabledBorder, 1, true),
                 new EmptyBorder(7, 12, 7, 12)
@@ -13541,7 +13606,7 @@ public final class DPolarisJavaApp {
             applyDisabledStyle(button, disabledBg, disabledBorder);
             return;
         }
-        button.setForeground(CONTROL_TEXT_ENABLED);
+        button.setForeground(pickTextColorForBackground(enabledBg));
         button.setBackground(enabledBg);
         button.setBorder(new CompoundBorder(
                 new LineBorder(enabledBorder, 1, true),
