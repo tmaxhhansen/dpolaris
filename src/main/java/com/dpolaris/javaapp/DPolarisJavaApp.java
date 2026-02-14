@@ -10304,23 +10304,37 @@ public final class DPolarisJavaApp {
                     appendBackendLog(ts() + " | [SYSTEM] [5/7] Checking port ownership.");
                     PortOwnershipInfo ownership = detectPortOwnership(host, port);
                     if (ownership.listening() && ownership.pid() != null) {
-                        if (managedPid != null && ownership.pid().longValue() == managedPid.longValue()) {
-                            appendBackendLog(ts() + " | [SYSTEM] Port still owned by managed PID "
-                                    + managedPid + "; forcing termination.");
+                        appendBackendLog(ts() + " | [SYSTEM] Detected LISTENING owner on "
+                                + host + ":" + port + " -> PID " + ownership.pid()
+                                + " | cmd: " + truncateForDetail(ownership.commandLine()));
+                        boolean managedMatch = managedPid != null && ownership.pid().longValue() == managedPid.longValue();
+                        boolean knownBackendOwner = isLikelyDpolarisBackendOwner(ownership.commandLine());
+                        if (managedMatch || knownBackendOwner) {
+                            String reason = managedMatch
+                                    ? "managed PID match"
+                                    : "owner command line matches dpolaris_ai backend signature";
+                            appendBackendLog(ts() + " | [SYSTEM] Forcing termination of PID "
+                                    + ownership.pid() + " (" + reason + ").");
                             boolean killed = killProcessByPid(ownership.pid());
                             if (!killed) {
                                 return CleanResetResult.failureResult(
-                                        "Failed to terminate managed PID " + managedPid + " on port " + port + ".",
+                                        "Failed to terminate backend owner PID " + ownership.pid() + " on port " + port + ".",
                                         ownership
                                 );
                             }
+                            boolean cleared = waitForPortToClear(host, port, 3000);
                             ownership = detectPortOwnership(host, port);
-                            if (ownership.listening()) {
+                            if (!cleared || ownership.listening()) {
+                                appendBackendLog(ts() + " | [SYSTEM] Port " + port + " still LISTENING after kill attempt."
+                                        + " Current owner PID "
+                                        + firstNonBlank(ownership.pidOrUnknown(), "unknown")
+                                        + " | cmd: " + truncateForDetail(ownership.commandLine()));
                                 return CleanResetResult.failureResult(
-                                        "Port " + port + " remains in use after managed PID termination.",
+                                        "Port " + port + " remains in use after backend owner termination attempt.",
                                         ownership
                                 );
                             }
+                            appendBackendLog(ts() + " | [SYSTEM] Port " + port + " is now free.");
                         } else {
                             String msg = "Port is in use by PID " + ownership.pid()
                                     + "; cannot start backend. Unknown owner will not be killed automatically.";
@@ -10383,6 +10397,37 @@ public final class DPolarisJavaApp {
             }
         };
         worker.execute();
+    }
+
+    private boolean isLikelyDpolarisBackendOwner(String commandLine) {
+        String cmd = safeLower(commandLine).replace('"', ' ').replace('/', '\\');
+        if (cmd.isBlank()) {
+            return false;
+        }
+        if (cmd.contains("dpolaris_ai")) {
+            return true;
+        }
+        if (cmd.contains("cli.main server")) {
+            return true;
+        }
+        return cmd.contains("\\.venv\\scripts\\python.exe -m cli.main server");
+    }
+
+    private boolean waitForPortToClear(String host, int port, int timeoutMs) {
+        long deadline = System.currentTimeMillis() + Math.max(250, timeoutMs);
+        while (System.currentTimeMillis() < deadline) {
+            PortOwnershipInfo owner = detectPortOwnership(host, port);
+            if (!owner.listening()) {
+                return true;
+            }
+            try {
+                Thread.sleep(200);
+            } catch (InterruptedException interrupted) {
+                Thread.currentThread().interrupt();
+                return false;
+            }
+        }
+        return !detectPortOwnership(host, port).listening();
     }
 
     private void clearStaleRuntimeFiles() {
