@@ -169,6 +169,8 @@ public final class DPolarisJavaApp {
     private JButton trainButton;
     private JButton stopButton;
     private JLabel trainingStatusValue;
+    private JButton trainingReadinessRefreshButton;
+    private JLabel trainingReadinessStatusLabel;
     private JLabel trainingGuardrailSummaryLabel;
     private JLabel trainingGuardrailLeakageLabel;
     private JLabel trainingGuardrailCostsLabel;
@@ -407,6 +409,19 @@ public final class DPolarisJavaApp {
     private volatile SwingWorker<DoctorReport, Void> activeDoctorWorker;
     private volatile String doctorLastReportText = "Doctor report has not been run yet.";
     private volatile String doctorLastFixCommands = "";
+    private JTextField dlJobsSymbolField;
+    private JComboBox<String> dlJobsModelCombo;
+    private JSpinner dlJobsEpochsSpinner;
+    private JButton dlJobsStartButton;
+    private JButton dlJobsStopButton;
+    private JButton dlJobsReadinessButton;
+    private JLabel dlJobsStatusLabel;
+    private JLabel dlJobsReadinessLabel;
+    private JLabel dlJobsJobIdLabel;
+    private JLabel dlJobsRunDirLabel;
+    private JLabel dlJobsErrorLabel;
+    private JTextArea dlJobsLogArea;
+    private volatile SwingWorker<Void, Void> activeDlJobsWorker;
 
     private volatile SwingWorker<Void, String> activeTrainingWorker;
     private volatile boolean backendActionInFlight;
@@ -618,6 +633,7 @@ public final class DPolarisJavaApp {
         styleTabbedPane(tabs);
         tabs.addTab("Backend Control", createBackendControlPanel());
         tabs.addTab("Training", createTrainingPanel());
+        tabs.addTab("Deep Learning Jobs", createDeepLearningJobsPanel());
         tabs.addTab("Backend Data", createDataPanel());
         tabs.addTab("Doctor", createDoctorPanel());
 
@@ -8172,10 +8188,12 @@ public final class DPolarisJavaApp {
         symbolField = new JTextField("SPY", 8);
         modeCombo = new JComboBox<>(new String[]{MODE_STABLE, MODE_DEEP});
         deepModelCombo = new JComboBox<>(new String[]{"lstm", "transformer"});
-        epochsSpinner = new JSpinner(new SpinnerNumberModel(50, 1, 5000, 1));
+        epochsSpinner = new JSpinner(new SpinnerNumberModel(2, 1, 5000, 1));
         trainButton = new JButton("Start Training");
-        stopButton = new JButton("Stop Polling");
+        stopButton = new JButton("Cancel/Stop");
         trainingStatusValue = new JLabel();
+        trainingReadinessRefreshButton = new JButton("Refresh Deep-Learning Readiness");
+        trainingReadinessStatusLabel = new JLabel();
         stopButton.setEnabled(false);
 
         styleInputField(symbolField);
@@ -8184,7 +8202,9 @@ public final class DPolarisJavaApp {
         styleSpinner(epochsSpinner);
         styleButton(trainButton, true);
         styleButton(stopButton, false);
+        styleButton(trainingReadinessRefreshButton, false);
         styleInlineStatus(trainingStatusValue, "Training: idle", COLOR_MUTED);
+        styleInlineStatus(trainingReadinessStatusLabel, "Readiness: unknown", COLOR_WARNING);
         modeCombo.setToolTipText(buildTrainingModeTooltip());
         deepModelCombo.addActionListener(e -> updateDeepModelTooltip());
         deepModelCombo.setToolTipText(buildDeepModelTooltip("lstm"));
@@ -8216,6 +8236,11 @@ public final class DPolarisJavaApp {
         rowTwo.add(stopButton);
         rowTwo.add(trainingStatusValue);
 
+        JPanel rowThree = new JPanel(new FlowLayout(FlowLayout.LEFT, 8, 0));
+        rowThree.setOpaque(false);
+        rowThree.add(trainingReadinessRefreshButton);
+        rowThree.add(trainingReadinessStatusLabel);
+
         JLabel noteLabel = createHintLabel(
                 "Stable mode is quick. Deep Learning mode can take longer depending on symbol history and model type."
         );
@@ -8232,6 +8257,9 @@ public final class DPolarisJavaApp {
 
         gbc.gridy++;
         controlsBody.add(rowTwo, gbc);
+
+        gbc.gridy++;
+        controlsBody.add(rowThree, gbc);
 
         gbc.gridy++;
         gbc.insets = new Insets(2, 0, 0, 0);
@@ -8283,8 +8311,90 @@ public final class DPolarisJavaApp {
 
         root.add(topStack, BorderLayout.NORTH);
         root.add(logScroll, BorderLayout.CENTER);
+        trainingReadinessRefreshButton.addActionListener(e -> refreshDeepLearningReadiness());
         updateDeepModelTooltip();
+        refreshDeepLearningReadiness();
         setTrainingGuardrailIdle();
+        return root;
+    }
+
+    private JPanel createDeepLearningJobsPanel() {
+        JPanel root = new JPanel(new BorderLayout(8, 8));
+        root.setBackground(COLOR_BG);
+        root.setBorder(new EmptyBorder(8, 0, 0, 0));
+
+        dlJobsSymbolField = new JTextField("SPY", 8);
+        dlJobsModelCombo = new JComboBox<>(new String[]{"lstm", "transformer"});
+        dlJobsEpochsSpinner = new JSpinner(new SpinnerNumberModel(2, 1, 5000, 1));
+        dlJobsStartButton = new JButton("Run Job");
+        dlJobsStopButton = new JButton("Stop Polling");
+        dlJobsReadinessButton = new JButton("Refresh Readiness");
+        dlJobsStatusLabel = new JLabel();
+        dlJobsReadinessLabel = new JLabel();
+        dlJobsJobIdLabel = new JLabel();
+        dlJobsRunDirLabel = new JLabel();
+        dlJobsErrorLabel = new JLabel();
+
+        styleInputField(dlJobsSymbolField);
+        styleCombo(dlJobsModelCombo);
+        styleSpinner(dlJobsEpochsSpinner);
+        styleButton(dlJobsStartButton, true);
+        styleButton(dlJobsStopButton, false);
+        styleButton(dlJobsReadinessButton, false);
+        dlJobsStopButton.setEnabled(false);
+
+        styleInlineStatus(dlJobsStatusLabel, "Job: idle", COLOR_MUTED);
+        styleInlineStatus(dlJobsReadinessLabel, "Readiness: unknown", COLOR_WARNING);
+        styleInlineStatus(dlJobsJobIdLabel, "Job ID: -", COLOR_MUTED);
+        styleInlineStatus(dlJobsRunDirLabel, "Run Dir: -", COLOR_MUTED);
+        styleInlineStatus(dlJobsErrorLabel, "Error: -", COLOR_MUTED);
+
+        JPanel rowOne = new JPanel(new FlowLayout(FlowLayout.LEFT, 8, 0));
+        rowOne.setOpaque(false);
+        rowOne.add(createFormLabel("Symbol"));
+        rowOne.add(dlJobsSymbolField);
+        rowOne.add(createFormLabel("Model"));
+        rowOne.add(dlJobsModelCombo);
+        rowOne.add(createFormLabel("Epochs"));
+        rowOne.add(dlJobsEpochsSpinner);
+        rowOne.add(dlJobsStartButton);
+        rowOne.add(dlJobsStopButton);
+        rowOne.add(dlJobsStatusLabel);
+
+        JPanel rowTwo = new JPanel(new FlowLayout(FlowLayout.LEFT, 8, 0));
+        rowTwo.setOpaque(false);
+        rowTwo.add(dlJobsReadinessButton);
+        rowTwo.add(dlJobsReadinessLabel);
+        rowTwo.add(dlJobsJobIdLabel);
+
+        JPanel rowThree = new JPanel(new FlowLayout(FlowLayout.LEFT, 8, 0));
+        rowThree.setOpaque(false);
+        rowThree.add(dlJobsRunDirLabel);
+        rowThree.add(dlJobsErrorLabel);
+
+        JPanel controlsBody = new JPanel();
+        controlsBody.setOpaque(false);
+        controlsBody.setLayout(new BoxLayout(controlsBody, BoxLayout.Y_AXIS));
+        controlsBody.add(rowOne);
+        controlsBody.add(Box.createVerticalStrut(6));
+        controlsBody.add(rowTwo);
+        controlsBody.add(Box.createVerticalStrut(6));
+        controlsBody.add(rowThree);
+
+        JPanel controlsCard = createCardPanel();
+        controlsCard.add(createSectionHeader("Deep Learning Job Controls"), BorderLayout.NORTH);
+        controlsCard.add(controlsBody, BorderLayout.CENTER);
+
+        dlJobsLogArea = createLogArea();
+        JScrollPane logScroll = createLogScrollPane(dlJobsLogArea, "Deep Learning Job Logs (tail)");
+
+        dlJobsStartButton.addActionListener(e -> startDeepLearningJobPanelRun());
+        dlJobsStopButton.addActionListener(e -> stopDeepLearningJobPanelRun());
+        dlJobsReadinessButton.addActionListener(e -> refreshDeepLearningReadiness());
+
+        root.add(controlsCard, BorderLayout.NORTH);
+        root.add(logScroll, BorderLayout.CENTER);
+        refreshDeepLearningReadiness();
         return root;
     }
 
@@ -10089,6 +10199,238 @@ public final class DPolarisJavaApp {
                 + "<b>LSTM</b>: sequence memory model, typically lighter/faster on smaller datasets.<br>"
                 + "<b>Transformer</b>: attention-based model, better at longer-range patterns but usually needs more data/compute.<br>"
                 + "<br><b>Selected:</b> " + selectedLabel + "</html>";
+    }
+
+    private void refreshDeepLearningReadiness() {
+        configureClientFromUI();
+        if (dlJobsReadinessButton != null) {
+            dlJobsReadinessButton.setEnabled(false);
+        }
+        if (trainingReadinessRefreshButton != null) {
+            trainingReadinessRefreshButton.setEnabled(false);
+        }
+        setDeepLearningReadiness("Readiness: checking...", COLOR_WARNING);
+
+        SwingWorker<Map<String, Object>, Void> worker = new SwingWorker<>() {
+            @Override
+            protected Map<String, Object> doInBackground() throws Exception {
+                return apiClient.fetchDeepLearningStatus();
+            }
+
+            @Override
+            protected void done() {
+                if (dlJobsReadinessButton != null) {
+                    dlJobsReadinessButton.setEnabled(true);
+                }
+                if (trainingReadinessRefreshButton != null) {
+                    trainingReadinessRefreshButton.setEnabled(true);
+                }
+                try {
+                    Map<String, Object> status = get();
+                    List<String> missing = extractMissingDependencies(status);
+                    boolean ready = missing.isEmpty();
+                    String msg;
+                    Color color;
+                    if (ready) {
+                        msg = "Readiness: OK";
+                        color = COLOR_SUCCESS;
+                    } else {
+                        msg = "Readiness: missing deps (" + String.join(", ", missing) + ")";
+                        color = COLOR_WARNING;
+                    }
+                    setDeepLearningReadiness(msg, color);
+                } catch (Exception ex) {
+                    setDeepLearningReadiness("Readiness: unavailable", COLOR_DANGER);
+                }
+            }
+        };
+        worker.execute();
+    }
+
+    private List<String> extractMissingDependencies(Map<String, Object> status) {
+        List<String> missing = new ArrayList<>();
+        Object raw = firstNonNull(
+                findAnyValue(status, "missing_dependencies", "missingDeps", "missing", "dependencies_missing"),
+                status.get("missing_dependencies")
+        );
+        if (raw instanceof List<?> list) {
+            for (Object item : list) {
+                String token = stringOrEmpty(item);
+                if (!token.isBlank()) {
+                    missing.add(token);
+                }
+            }
+        } else if (raw instanceof Map<?, ?> mapRaw) {
+            Map<String, Object> map = Json.asObject(mapRaw);
+            for (Map.Entry<String, Object> entry : map.entrySet()) {
+                Object value = entry.getValue();
+                if (value instanceof Boolean b && !b) {
+                    missing.add(entry.getKey());
+                }
+            }
+        } else if (raw != null && !stringOrEmpty(raw).isBlank()) {
+            missing.add(stringOrEmpty(raw));
+        }
+
+        if (missing.isEmpty()) {
+            Object torch = findAnyValue(status, "torch_available", "torchAvailable", "torch");
+            if (torch instanceof Boolean b && !b) {
+                missing.add("torch");
+            } else if (torch instanceof String s && ("false".equalsIgnoreCase(s) || "missing".equalsIgnoreCase(s))) {
+                missing.add("torch");
+            }
+        }
+        return missing;
+    }
+
+    private void setDeepLearningReadiness(String text, Color color) {
+        if (dlJobsReadinessLabel != null) {
+            styleInlineStatus(dlJobsReadinessLabel, text, color);
+        }
+        if (trainingReadinessStatusLabel != null) {
+            styleInlineStatus(trainingReadinessStatusLabel, text, color);
+        }
+    }
+
+    private void startDeepLearningJobPanelRun() {
+        if (activeDlJobsWorker != null && !activeDlJobsWorker.isDone()) {
+            JOptionPane.showMessageDialog(frame, "A deep-learning job poller is already running.", "Info",
+                    JOptionPane.INFORMATION_MESSAGE);
+            return;
+        }
+
+        configureClientFromUI();
+        String symbol = dlJobsSymbolField == null ? "" : dlJobsSymbolField.getText().trim().toUpperCase();
+        if (symbol.isBlank()) {
+            JOptionPane.showMessageDialog(frame, "Please enter a symbol.", "Validation",
+                    JOptionPane.WARNING_MESSAGE);
+            return;
+        }
+        String modelType = dlJobsModelCombo == null ? "lstm" : String.valueOf(dlJobsModelCombo.getSelectedItem());
+        int epochs = dlJobsEpochsSpinner == null ? 2 : (Integer) dlJobsEpochsSpinner.getValue();
+
+        dlJobsStartButton.setEnabled(false);
+        dlJobsStopButton.setEnabled(true);
+        styleInlineStatus(dlJobsStatusLabel, "Job: queued...", COLOR_WARNING);
+        styleInlineStatus(dlJobsJobIdLabel, "Job ID: -", COLOR_MUTED);
+        styleInlineStatus(dlJobsRunDirLabel, "Run Dir: -", COLOR_MUTED);
+        styleInlineStatus(dlJobsErrorLabel, "Error: -", COLOR_MUTED);
+        if (dlJobsLogArea != null) {
+            dlJobsLogArea.setText(ts() + " | Queuing deep-learning job: " + symbol
+                    + " model=" + modelType + " epochs=" + epochs + "\n");
+        }
+
+        activeDlJobsWorker = new SwingWorker<>() {
+            @Override
+            protected Void doInBackground() {
+                try {
+                    Map<String, Object> queue = apiClient.enqueueDeepLearningJob(symbol, modelType, epochs);
+                    String jobId = Json.asString(firstNonNull(queue.get("id"), firstNonNull(queue.get("job_id"), queue.get("jobId"))));
+                    if (jobId == null || jobId.isBlank()) {
+                        throw new IOException("Missing job id in queue response: " + Json.pretty(queue));
+                    }
+                    SwingUtilities.invokeLater(() -> styleInlineStatus(dlJobsJobIdLabel, "Job ID: " + jobId, COLOR_SUCCESS));
+                    pollDeepLearningJobPanel(jobId);
+                } catch (Exception ex) {
+                    SwingUtilities.invokeLater(() -> {
+                        styleInlineStatus(dlJobsStatusLabel, "Job: failed", COLOR_DANGER);
+                        styleInlineStatus(dlJobsErrorLabel, "Error: " + humanizeError(ex), COLOR_DANGER);
+                        if (dlJobsLogArea != null) {
+                            dlJobsLogArea.append(ts() + " | Queue failed: " + humanizeError(ex) + "\n");
+                        }
+                    });
+                }
+                return null;
+            }
+
+            @Override
+            protected void done() {
+                dlJobsStartButton.setEnabled(true);
+                dlJobsStopButton.setEnabled(false);
+            }
+        };
+        activeDlJobsWorker.execute();
+    }
+
+    private void pollDeepLearningJobPanel(String jobId) {
+        while (!Thread.currentThread().isInterrupted()) {
+            if (activeDlJobsWorker == null || activeDlJobsWorker.isCancelled()) {
+                SwingUtilities.invokeLater(() -> styleInlineStatus(dlJobsStatusLabel, "Job: polling stopped", COLOR_WARNING));
+                return;
+            }
+            try {
+                Map<String, Object> job = apiClient.fetchJob(jobId);
+                String status = firstNonBlank(Json.asString(job.get("status")), "unknown");
+                Object error = firstNonNull(job.get("error"), findAnyValue(job, "detail", "message"));
+                Object runDir = extractRunDirFromJob(job);
+
+                List<String> logs = extractLogs(job.get("logs"));
+                List<String> tail = logs == null ? List.of() : logs.subList(Math.max(0, logs.size() - 80), logs.size());
+                String tailText = tail.isEmpty() ? "No logs yet." : String.join("\n", tail);
+
+                SwingUtilities.invokeLater(() -> {
+                    Color statusColor = "completed".equalsIgnoreCase(status)
+                            ? COLOR_SUCCESS
+                            : ("failed".equalsIgnoreCase(status) ? COLOR_DANGER : COLOR_WARNING);
+                    styleInlineStatus(dlJobsStatusLabel, "Job: " + status, statusColor);
+                    styleInlineStatus(dlJobsRunDirLabel, "Run Dir: " + firstNonBlank(stringOrEmpty(runDir), "-"), COLOR_MUTED);
+                    if (error != null && !stringOrEmpty(error).isBlank()) {
+                        styleInlineStatus(dlJobsErrorLabel, "Error: " + stringOrEmpty(error), COLOR_DANGER);
+                    } else {
+                        styleInlineStatus(dlJobsErrorLabel, "Error: -", COLOR_MUTED);
+                    }
+                    if (dlJobsLogArea != null) {
+                        dlJobsLogArea.setText(tailText);
+                        dlJobsLogArea.setCaretPosition(dlJobsLogArea.getDocument().getLength());
+                    }
+                });
+
+                if ("completed".equalsIgnoreCase(status) || "failed".equalsIgnoreCase(status)) {
+                    return;
+                }
+                Thread.sleep(2000);
+            } catch (InterruptedException interrupted) {
+                Thread.currentThread().interrupt();
+                return;
+            } catch (Exception ex) {
+                SwingUtilities.invokeLater(() -> {
+                    styleInlineStatus(dlJobsStatusLabel, "Job: polling error", COLOR_DANGER);
+                    styleInlineStatus(dlJobsErrorLabel, "Error: " + humanizeError(ex), COLOR_DANGER);
+                });
+                try {
+                    Thread.sleep(2000);
+                } catch (InterruptedException interrupted) {
+                    Thread.currentThread().interrupt();
+                    return;
+                }
+            }
+        }
+    }
+
+    private void stopDeepLearningJobPanelRun() {
+        SwingWorker<Void, Void> worker = activeDlJobsWorker;
+        if (worker != null && !worker.isDone()) {
+            worker.cancel(true);
+        }
+        dlJobsStartButton.setEnabled(true);
+        dlJobsStopButton.setEnabled(false);
+        styleInlineStatus(dlJobsStatusLabel, "Job: polling stopped", COLOR_WARNING);
+    }
+
+    private Object extractRunDirFromJob(Map<String, Object> job) {
+        Object direct = firstNonNull(job.get("run_dir"), job.get("runDir"));
+        if (direct != null && !stringOrEmpty(direct).isBlank()) {
+            return direct;
+        }
+        Object result = job.get("result");
+        if (result instanceof Map<?, ?> mapRaw) {
+            Map<String, Object> map = Json.asObject(mapRaw);
+            Object nested = firstNonNull(map.get("run_dir"), map.get("runDir"));
+            if (nested != null) {
+                return nested;
+            }
+        }
+        return null;
     }
 
     private void startTraining() {

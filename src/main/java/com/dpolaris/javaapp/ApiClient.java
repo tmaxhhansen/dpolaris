@@ -338,6 +338,24 @@ final class ApiClient {
         return Json.asObject(response);
     }
 
+    Map<String, Object> fetchDeepLearningStatus() throws IOException, InterruptedException {
+        Object response = requestWithFallback(
+                "GET",
+                List.of(
+                        "/api/deep-learning/status",
+                        "/deep-learning/status"
+                ),
+                null,
+                20
+        );
+        if (response instanceof Map<?, ?> mapRaw) {
+            return Json.asObject(mapRaw);
+        }
+        Map<String, Object> wrapped = new LinkedHashMap<>();
+        wrapped.put("raw", response);
+        return wrapped;
+    }
+
     Map<String, Object> startDaemon() throws IOException, InterruptedException {
         Object response = request("POST", "/api/scheduler/start", "{}", 30);
         return Json.asObject(response);
