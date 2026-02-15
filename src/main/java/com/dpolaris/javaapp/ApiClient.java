@@ -189,6 +189,81 @@ final class ApiClient {
         }
     }
 
+    Map<String, Object> runDeepLearning(List<String> tickers) throws IOException, InterruptedException {
+        Map<String, Object> payload = new LinkedHashMap<>();
+        payload.put("tickers", tickers);
+        payload.put("fetch_data", true);
+        payload.put("train_if_missing", true);
+        String body = Json.compact(payload);
+        Object response = requestWithFallback(
+                "POST",
+                List.of("/deep-learning/run", "/api/deep-learning/run", "/dl/run"),
+                body,
+                300  // 5 minutes timeout for training
+        );
+        return Json.asObject(response);
+    }
+
+    /**
+     * Fetch stock metadata (sector, market cap, avg volume, change%) for multiple symbols.
+     * GET /api/stocks/metadata?symbols=AAPL,MSFT,GOOGL
+     */
+    Map<String, Object> fetchStocksMetadata(List<String> symbols) throws IOException, InterruptedException {
+        if (symbols == null || symbols.isEmpty()) {
+            return new LinkedHashMap<>();
+        }
+        String symbolsParam = String.join(",", symbols);
+        Object response = requestWithFallback(
+                "GET",
+                List.of(
+                    "/api/stocks/metadata?symbols=" + encode(symbolsParam),
+                    "/stocks/metadata?symbols=" + encode(symbolsParam)
+                ),
+                null,
+                30
+        );
+        return Json.asObject(response);
+    }
+
+    /**
+     * Fetch last analysis dates for multiple symbols.
+     * GET /api/analysis/last?symbols=AAPL,MSFT,GOOGL
+     */
+    Map<String, Object> fetchAnalysisLast(List<String> symbols) throws IOException, InterruptedException {
+        if (symbols == null || symbols.isEmpty()) {
+            return new LinkedHashMap<>();
+        }
+        String symbolsParam = String.join(",", symbols);
+        Object response = requestWithFallback(
+                "GET",
+                List.of(
+                    "/api/analysis/last?symbols=" + encode(symbolsParam),
+                    "/analysis/last?symbols=" + encode(symbolsParam)
+                ),
+                null,
+                30
+        );
+        return Json.asObject(response);
+    }
+
+    /**
+     * Fetch detailed analysis artifacts for a single symbol.
+     * GET /api/analysis/detail/{symbol}
+     */
+    Map<String, Object> fetchAnalysisDetail(String symbol) throws IOException, InterruptedException {
+        String normalized = symbol.toUpperCase();
+        Object response = requestWithFallback(
+                "GET",
+                List.of(
+                    "/api/analysis/detail/" + encode(normalized),
+                    "/analysis/detail/" + encode(normalized)
+                ),
+                null,
+                45
+        );
+        return Json.asObject(response);
+    }
+
     Map<String, Object> generateTradeSetup(String symbol, int horizonDays) throws IOException, InterruptedException {
         String normalized = symbol.toUpperCase();
         String path = "/api/signals/" + encode(normalized) + "?horizon_days=" + horizonDays;
@@ -447,10 +522,10 @@ final class ApiClient {
             throws IOException, InterruptedException {
         String expandedRepoPath = expandUserHome(firstNonBlank(opsRepoPath, "~/my-git/dPolaris_ops"));
         File repoDir = new File(expandedRepoPath);
-        String python = isWindows()
-                ? expandedRepoPath + File.separator + ".venv" + File.separator + "Scripts" + File.separator + "python.exe"
-                : expandedRepoPath + File.separator + ".venv" + File.separator + "bin" + File.separator + "python";
-        List<String> command = List.of(python, "-m", "ops.main", action);
+        // Use the run_ops shell script (macOS) or python -m ops.main (Windows)
+        List<String> command = isWindows()
+                ? List.of("python", "-m", "ops.main", action)
+                : List.of(expandedRepoPath + File.separator + "run_ops", action);
 
         ProcessOutput output = executeLocalCommand(command, repoDir, timeoutSeconds);
         String stdout = output.stdout() == null ? "" : output.stdout().trim();

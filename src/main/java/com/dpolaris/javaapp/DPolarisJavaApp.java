@@ -106,7 +106,7 @@ public final class DPolarisJavaApp {
     private static final Color COLOR_INPUT = new Color(49, 52, 62);
     private static final Color COLOR_MENU_ACTIVE = new Color(64, 86, 133);
     private static final String VIEW_AI_MANAGEMENT = "AI_MANAGEMENT";
-    private static final String VIEW_UNIVERSE_SCAN = "UNIVERSE_SCAN";
+    private static final String VIEW_DEEP_LEARNING = "DEEP_LEARNING";
     private static final String VIEW_DASHBOARD = "DASHBOARD";
     private static final String VIEW_TRAINING_RUNS = "TRAINING_RUNS";
     private static final String VIEW_PREDICTION_INSPECTOR = "PREDICTION_INSPECTOR";
@@ -183,6 +183,7 @@ public final class DPolarisJavaApp {
     private JLabel trainingGuardrailQualityLabel;
 
     private JTextArea trainingLogArea;
+    private JTextArea dlResultsArea;
     private JTextArea dataArea;
     private JTextArea memoryDistributionArea;
     private JLabel dataStatusValue;
@@ -201,7 +202,7 @@ public final class DPolarisJavaApp {
     private JTextArea dashboardPredictionArea;
     private JTextArea dashboardInsightsArea;
     private JButton navAiManagementButton;
-    private JButton navUniverseButton;
+    private JButton navDeepLearningButton;
     private JButton navDashboardButton;
     private JButton navTrainingRunsButton;
     private JButton navPredictionInspectorButton;
@@ -332,7 +333,6 @@ public final class DPolarisJavaApp {
     private JButton universeExportCsvButton;
     private JButton universeExportJsonButton;
     private JButton universeRunScanButton;
-    private JButton universeRunSelectedScanButton;
     private JLabel universeStatusLabel;
     private JLabel universeMetaLabel;
     private JLabel universeHashLabel;
@@ -398,6 +398,8 @@ public final class DPolarisJavaApp {
     private volatile String activeTrainingJobId;
     private volatile boolean activeTrainingAuditFinalized;
     private volatile String lastScanWarningSignature = "";
+    private volatile String lastTickerStatusSignature = "";
+    private volatile String lastTickerFailureSignature = "";
     private volatile boolean systemControlActionInFlight = false;
     private volatile String lastBackendHealth = "unknown";
     private volatile String lastBackendRestart = "—";
@@ -428,7 +430,7 @@ public final class DPolarisJavaApp {
 
         frame = new JFrame("dPolaris Java");
         frame.setDefaultCloseOperation(WindowConstants.EXIT_ON_CLOSE);
-        frame.setSize(1200, 820);
+        frame.setSize(1400, 900);
         frame.setMinimumSize(new Dimension(1000, 700));
         frame.setLayout(new BorderLayout(8, 8));
         frame.getContentPane().setBackground(COLOR_BG);
@@ -489,7 +491,7 @@ public final class DPolarisJavaApp {
         contentPanel = new JPanel(contentLayout);
         contentPanel.setBackground(COLOR_BG);
         contentPanel.add(createAiManagementPanel(), VIEW_AI_MANAGEMENT);
-        contentPanel.add(createUniverseScanPanel(), VIEW_UNIVERSE_SCAN);
+        contentPanel.add(createDeepLearningPanel(), VIEW_DEEP_LEARNING);
         contentPanel.add(createDashboardPanel(), VIEW_DASHBOARD);
         contentPanel.add(createTrainingRunsPanel(), VIEW_TRAINING_RUNS);
         contentPanel.add(createPredictionInspectorPanel(), VIEW_PREDICTION_INSPECTOR);
@@ -499,15 +501,8 @@ public final class DPolarisJavaApp {
         frame.add(centerWrap, BorderLayout.CENTER);
 
         checkConnectionButton.addActionListener(e -> checkConnection());
-        startBackendButton.addActionListener(e -> startBackendProcess());
-        stopBackendButton.addActionListener(e -> stopBackendProcess());
-        startDaemonButton.addActionListener(e -> startDaemon());
-        stopDaemonButton.addActionListener(e -> stopDaemon());
-        modeCombo.addActionListener(e -> refreshTrainingControls());
-        trainButton.addActionListener(e -> startTraining());
-        stopButton.addActionListener(e -> stopTraining());
         navAiManagementButton.addActionListener(e -> showView(VIEW_AI_MANAGEMENT));
-        navUniverseButton.addActionListener(e -> showView(VIEW_UNIVERSE_SCAN));
+        navDeepLearningButton.addActionListener(e -> showView(VIEW_DEEP_LEARNING));
         navDashboardButton.addActionListener(e -> showView(VIEW_DASHBOARD));
         navTrainingRunsButton.addActionListener(e -> showView(VIEW_TRAINING_RUNS));
         navPredictionInspectorButton.addActionListener(e -> showView(VIEW_PREDICTION_INSPECTOR));
@@ -523,8 +518,6 @@ public final class DPolarisJavaApp {
             }
         });
 
-        refreshTrainingControls();
-        refreshBackendControls();
         showView(VIEW_AI_MANAGEMENT);
     }
 
@@ -551,14 +544,14 @@ public final class DPolarisJavaApp {
         gbc.fill = GridBagConstraints.HORIZONTAL;
         gbc.insets = new Insets(0, 0, 8, 0);
 
-        navAiManagementButton = new JButton("AI Management");
+        navAiManagementButton = new JButton("Management");
         styleNavButton(navAiManagementButton);
         buttonPanel.add(navAiManagementButton, gbc);
 
         gbc.gridy++;
-        navUniverseButton = new JButton("Universe");
-        styleNavButton(navUniverseButton);
-        buttonPanel.add(navUniverseButton, gbc);
+        navDeepLearningButton = new JButton("Deep Learning");
+        styleNavButton(navDeepLearningButton);
+        buttonPanel.add(navDeepLearningButton, gbc);
 
         gbc.gridy++;
         navDashboardButton = new JButton("Dashboard");
@@ -589,8 +582,6 @@ public final class DPolarisJavaApp {
         JTabbedPane tabs = new JTabbedPane();
         styleTabbedPane(tabs);
         tabs.addTab("System Control", createSystemControlPanel());
-        tabs.addTab("Backend Control", createBackendControlPanel());
-        tabs.addTab("Training", createTrainingPanel());
         tabs.addTab("Backend Data", createDataPanel());
 
         JPanel wrap = new JPanel(new BorderLayout());
@@ -614,7 +605,7 @@ public final class DPolarisJavaApp {
 
         startupBannerStartButton = new JButton("Start Backend Now");
         styleButton(startupBannerStartButton, true);
-        startupBannerStartButton.addActionListener(e -> runBackendControlAction("start", true));
+        startupBannerStartButton.addActionListener(e -> startBackendProcess());
         banner.add(startupBannerStartButton, BorderLayout.EAST);
 
         banner.setVisible(false);
@@ -779,9 +770,9 @@ public final class DPolarisJavaApp {
 
         systemConfigSaveButton.addActionListener(e -> saveSystemControlConfig());
         systemConfigReloadButton.addActionListener(e -> reloadSystemControlConfig());
-        systemBackendStartButton.addActionListener(e -> runBackendControlAction("start", false));
-        systemBackendStopButton.addActionListener(e -> runBackendControlAction("stop", false));
-        systemBackendRestartButton.addActionListener(e -> runBackendControlAction("restart", false));
+        systemBackendStartButton.addActionListener(e -> startBackendProcess());
+        systemBackendStopButton.addActionListener(e -> stopBackendProcess());
+        systemBackendRestartButton.addActionListener(e -> { stopBackendProcess(); startBackendProcess(); });
         systemBackendStatusButton.addActionListener(e -> runBackendControlAction("status", false));
         systemBackendResetButton.addActionListener(e -> runBackendControlAction("reset", false));
         systemOpsStartButton.addActionListener(e -> runOrchestratorControlAction("start"));
@@ -793,20 +784,8 @@ public final class DPolarisJavaApp {
         return root;
     }
 
-    private JPanel createUniverseScanPanel() {
-        universeMainTabs = new JTabbedPane();
-        styleTabbedPane(universeMainTabs);
-        universeMainTabs.addTab("Universe", createUniverseBrowserPanel());
-        universeMainTabs.addTab("Scan Results", createScanResultsPanel());
-        universeMainTabs.addTab("Runs", createScanRunsPanel());
-
-        JPanel wrap = new JPanel(new BorderLayout());
-        wrap.setBackground(COLOR_BG);
-        wrap.add(universeMainTabs, BorderLayout.CENTER);
-        return wrap;
-    }
-
-    private JPanel createUniverseBrowserPanel() {
+    private JPanel createDeepLearningPanel() {
+        // Create stock selection panel with tabs
         JPanel root = new JPanel(new BorderLayout(8, 8));
         root.setBackground(COLOR_BG);
 
@@ -815,36 +794,23 @@ public final class DPolarisJavaApp {
         universeLiquidityFilterSpinner = new JSpinner(new SpinnerNumberModel(0.0, 0.0, 1_000_000_000_000.0, 100_000.0));
         universeMentionFilterSpinner = new JSpinner(new SpinnerNumberModel(0L, 0L, 10_000_000L, 1L));
         universeRefreshButton = new JButton("Refresh");
-        universeRefreshNowButton = new JButton("Refresh Universe Now");
         universeSelectAllButton = new JButton("Select All");
         universeClearSelectionButton = new JButton("Clear");
-        universeExportCsvButton = new JButton("Export CSV");
-        universeExportJsonButton = new JButton("Export JSON");
-        universeRunScanButton = new JButton("Run Deep Learning Scan");
-        universeRunSelectedScanButton = new JButton("Run Selected");
+        universeRunScanButton = new JButton("Run Deep Learning");
         universeStatusLabel = new JLabel();
         universeMetaLabel = new JLabel();
-        universeHashLabel = new JLabel();
 
         styleInputField(universeSearchField);
         styleInputField(universeSectorFilterField);
         styleSpinner(universeLiquidityFilterSpinner);
         styleSpinner(universeMentionFilterSpinner);
-        styleButton(universeRefreshButton, true);
-        styleButton(universeRefreshNowButton, true);
-        universeRefreshNowButton.setToolTipText("Trigger immediate rebuild of Nasdaq/WSB/Combined universes");
-        styleButton(universeSelectAllButton, true);
-        universeSelectAllButton.setToolTipText("Select every row in the active universe tab");
+        styleButton(universeRefreshButton, false);
+        styleButton(universeSelectAllButton, false);
         styleButton(universeClearSelectionButton, false);
-        universeClearSelectionButton.setToolTipText("Clear all selections in the active universe tab");
-        styleButton(universeExportCsvButton, false);
-        styleButton(universeExportJsonButton, false);
         styleButton(universeRunScanButton, true);
-        styleButton(universeRunSelectedScanButton, true);
-        universeRunSelectedScanButton.setToolTipText("Run deep learning scan for selected tickers in active tab");
-        styleInlineStatus(universeStatusLabel, "Universe: idle", COLOR_MUTED);
-        styleInlineStatus(universeMetaLabel, "Last refresh: —", COLOR_MUTED);
-        styleInlineStatus(universeHashLabel, "Hash: —", COLOR_MUTED);
+        universeRunScanButton.setToolTipText("Run deep learning on selected tickers");
+        styleInlineStatus(universeStatusLabel, "Select tickers and click Run Deep Learning", COLOR_MUTED);
+        styleInlineStatus(universeMetaLabel, "", COLOR_MUTED);
 
         universeNasdaqTableModel = new UniverseTableModel();
         universeWsbTableModel = new UniverseTableModel();
@@ -872,8 +838,8 @@ public final class DPolarisJavaApp {
 
         universeTabs = new JTabbedPane();
         styleTabbedPane(universeTabs);
-        universeTabs.addTab("Nasdaq", createUniverseTablePane(universeNasdaqTable, "Nasdaq Universe"));
-        universeTabs.addTab("WSB", createUniverseTablePane(universeWsbTable, "WallStreetBets Universe"));
+        universeTabs.addTab("NASDAQ 300", createUniverseTablePane(universeNasdaqTable, "NASDAQ 300 Stocks"));
+        universeTabs.addTab("WSB 100", createUniverseTablePane(universeWsbTable, "WallStreetBets Top 100"));
         universeTabs.addTab("Combined", createUniverseTablePane(universeCombinedTable, "Combined Universe"));
 
         JPanel filters = new JPanel(new FlowLayout(FlowLayout.LEFT, 8, 0));
@@ -882,30 +848,25 @@ public final class DPolarisJavaApp {
         filters.add(universeSearchField);
         filters.add(createFormLabel("Sector"));
         filters.add(universeSectorFilterField);
-        filters.add(createFormLabel("Min Liquidity"));
+        filters.add(createFormLabel("Min Market Cap"));
         filters.add(universeLiquidityFilterSpinner);
         filters.add(createFormLabel("Min Mentions"));
         filters.add(universeMentionFilterSpinner);
 
         JPanel actionsRow = new JPanel(new FlowLayout(FlowLayout.LEFT, 8, 0));
         actionsRow.setOpaque(false);
-        actionsRow.add(universeRunSelectedScanButton);
         actionsRow.add(universeRunScanButton);
         actionsRow.add(universeSelectAllButton);
         actionsRow.add(universeClearSelectionButton);
         actionsRow.add(universeRefreshButton);
-        actionsRow.add(universeRefreshNowButton);
-        actionsRow.add(universeExportCsvButton);
-        actionsRow.add(universeExportJsonButton);
 
         JPanel metaRow = new JPanel(new FlowLayout(FlowLayout.LEFT, 8, 0));
         metaRow.setOpaque(false);
         metaRow.add(universeStatusLabel);
         metaRow.add(universeMetaLabel);
-        metaRow.add(universeHashLabel);
 
         JPanel top = createCardPanel();
-        top.add(createSectionHeader("Universe"), BorderLayout.NORTH);
+        top.add(createSectionHeader("Deep Learning - Stock Selection"), BorderLayout.NORTH);
         JPanel topBody = new JPanel();
         topBody.setLayout(new BoxLayout(topBody, BoxLayout.Y_AXIS));
         topBody.setOpaque(false);
@@ -920,56 +881,44 @@ public final class DPolarisJavaApp {
             updateUniverseMetaDisplay();
             updateUniverseRunButtonState();
             applyUniverseFilters();
-            ensureUniverseLoaded(false);
+            ensureDeepLearningTickersLoaded(false);
         });
-        universeRefreshButton.addActionListener(e -> ensureUniverseLoaded(true));
-        universeRefreshNowButton.addActionListener(e -> triggerUniverseRefreshNow());
+        universeRefreshButton.addActionListener(e -> ensureDeepLearningTickersLoaded(true));
         universeSelectAllButton.addActionListener(e -> setUniverseSelection(true));
         universeClearSelectionButton.addActionListener(e -> setUniverseSelection(false));
-        universeExportCsvButton.addActionListener(e -> exportActiveUniverseCsv());
-        universeExportJsonButton.addActionListener(e -> exportActiveUniverseJson());
-        universeRunScanButton.addActionListener(e -> openScanConfigDialog(false));
-        universeRunSelectedScanButton.addActionListener(e -> openScanConfigDialog(true));
+        universeRunScanButton.addActionListener(e -> runDeepLearningOnSelected());
+
         universeSearchField.getDocument().addDocumentListener(new DocumentListener() {
-            @Override
-            public void insertUpdate(DocumentEvent e) {
-                applyUniverseFilters();
-            }
-
-            @Override
-            public void removeUpdate(DocumentEvent e) {
-                applyUniverseFilters();
-            }
-
-            @Override
-            public void changedUpdate(DocumentEvent e) {
-                applyUniverseFilters();
-            }
+            @Override public void insertUpdate(DocumentEvent e) { applyUniverseFilters(); }
+            @Override public void removeUpdate(DocumentEvent e) { applyUniverseFilters(); }
+            @Override public void changedUpdate(DocumentEvent e) { applyUniverseFilters(); }
         });
         universeSectorFilterField.getDocument().addDocumentListener(new DocumentListener() {
-            @Override
-            public void insertUpdate(DocumentEvent e) {
-                applyUniverseFilters();
-            }
-
-            @Override
-            public void removeUpdate(DocumentEvent e) {
-                applyUniverseFilters();
-            }
-
-            @Override
-            public void changedUpdate(DocumentEvent e) {
-                applyUniverseFilters();
-            }
+            @Override public void insertUpdate(DocumentEvent e) { applyUniverseFilters(); }
+            @Override public void removeUpdate(DocumentEvent e) { applyUniverseFilters(); }
+            @Override public void changedUpdate(DocumentEvent e) { applyUniverseFilters(); }
         });
         universeLiquidityFilterSpinner.addChangeListener(e -> applyUniverseFilters());
         universeMentionFilterSpinner.addChangeListener(e -> applyUniverseFilters());
 
+        // Deep learning results area
+        dlResultsArea = createLogArea();
+        JScrollPane resultsScroll = createLogScrollPane(dlResultsArea, "Deep Learning Results");
+
+        JSplitPane split = new JSplitPane(JSplitPane.VERTICAL_SPLIT, universeTabs, resultsScroll);
+        split.setResizeWeight(0.6);
+        split.setDividerLocation(400);
+        split.setBorder(null);
+        split.setOpaque(false);
+
         root.add(top, BorderLayout.NORTH);
-        root.add(universeTabs, BorderLayout.CENTER);
-        refreshUniverseTabTitles();
-        updateUniverseRunButtonState();
+        root.add(split, BorderLayout.CENTER);
         return root;
+    }
+
+    private JPanel createUniverseScanPanel() {
+        // Legacy - redirect to deep learning panel
+        return createDeepLearningPanel();
     }
 
     private JScrollPane createUniverseTablePane(JTable table, String title) {
@@ -1060,9 +1009,9 @@ public final class DPolarisJavaApp {
         scanResultsTable.setSelectionMode(ListSelectionModel.SINGLE_SELECTION);
         scanResultsTableSorter = new TableRowSorter<>(scanResultsTableModel);
         scanResultsTable.setRowSorter(scanResultsTableSorter);
-        scanResultsTableSorter.setComparator(2, (a, b) -> Double.compare(parseSortableDouble(a), parseSortableDouble(b)));
-        scanResultsTableSorter.setComparator(7, (a, b) -> Double.compare(parseSortableDouble(a), parseSortableDouble(b)));
-        scanResultsTableSorter.setComparator(8, (a, b) -> Integer.compare(parseSortableInt(a), parseSortableInt(b)));
+        scanResultsTableSorter.setComparator(3, (a, b) -> Double.compare(parseSortableDouble(a), parseSortableDouble(b)));
+        scanResultsTableSorter.setComparator(8, (a, b) -> Double.compare(parseSortableDouble(a), parseSortableDouble(b)));
+        scanResultsTableSorter.setComparator(9, (a, b) -> Integer.compare(parseSortableInt(a), parseSortableInt(b)));
         scanResultsTable.addMouseListener(new MouseAdapter() {
             @Override
             public void mouseClicked(MouseEvent e) {
@@ -1270,6 +1219,83 @@ public final class DPolarisJavaApp {
         worker.execute();
     }
 
+    private void ensureDeepLearningTickersLoaded(boolean forceRefresh) {
+        // Alias for ensureUniverseLoaded - loads the stock tickers for deep learning
+        ensureUniverseLoaded(forceRefresh);
+    }
+
+    private void runDeepLearningOnSelected() {
+        UniverseTableModel activeModel = activeUniverseModel();
+        if (activeModel == null || activeModel.getRowCount() == 0) {
+            JOptionPane.showMessageDialog(
+                    frame,
+                    "No tickers available. Refresh the list first.",
+                    "Run Deep Learning",
+                    JOptionPane.WARNING_MESSAGE
+            );
+            return;
+        }
+
+        List<String> selectedTickers = selectedTickersFromModel(activeModel);
+        if (selectedTickers.isEmpty()) {
+            JOptionPane.showMessageDialog(
+                    frame,
+                    "No tickers selected. Check the boxes next to tickers you want to analyze.",
+                    "Run Deep Learning",
+                    JOptionPane.WARNING_MESSAGE
+            );
+            return;
+        }
+
+        // Update UI
+        if (dlResultsArea != null) {
+            dlResultsArea.setText(ts() + " | Starting deep learning for " + selectedTickers.size() + " tickers...\n");
+            dlResultsArea.append(ts() + " | Selected: " + String.join(", ", selectedTickers) + "\n");
+        }
+        styleInlineStatus(universeStatusLabel, "Running deep learning on " + selectedTickers.size() + " tickers...", COLOR_WARNING);
+        universeRunScanButton.setEnabled(false);
+
+        SwingWorker<Map<String, Object>, String> worker = new SwingWorker<>() {
+            @Override
+            protected Map<String, Object> doInBackground() throws Exception {
+                publish(ts() + " | Sending request to backend...");
+                return apiClient.runDeepLearning(selectedTickers);
+            }
+
+            @Override
+            protected void process(List<String> chunks) {
+                if (dlResultsArea != null) {
+                    for (String msg : chunks) {
+                        dlResultsArea.append(msg + "\n");
+                    }
+                    dlResultsArea.setCaretPosition(dlResultsArea.getDocument().getLength());
+                }
+            }
+
+            @Override
+            protected void done() {
+                universeRunScanButton.setEnabled(true);
+                try {
+                    Map<String, Object> result = get();
+                    if (dlResultsArea != null) {
+                        dlResultsArea.append(ts() + " | Deep learning completed.\n");
+                        dlResultsArea.append("─".repeat(60) + "\n");
+                        dlResultsArea.append(Json.pretty(result) + "\n");
+                        dlResultsArea.setCaretPosition(dlResultsArea.getDocument().getLength());
+                    }
+                    styleInlineStatus(universeStatusLabel, "Deep learning completed for " + selectedTickers.size() + " tickers", COLOR_SUCCESS);
+                } catch (Exception ex) {
+                    String error = humanizeError(ex);
+                    if (dlResultsArea != null) {
+                        dlResultsArea.append(ts() + " | ERROR: " + error + "\n");
+                    }
+                    styleInlineStatus(universeStatusLabel, "Deep learning failed: " + error, COLOR_DANGER);
+                }
+            }
+        };
+        worker.execute();
+    }
+
     private void refreshUniverseTabTitles() {
         if (universeTabs == null || universeTabs.getTabCount() < 3) {
             return;
@@ -1464,39 +1490,24 @@ public final class DPolarisJavaApp {
     }
 
     private void updateUniverseRunButtonState() {
-        if (universeRunScanButton == null || universeRunSelectedScanButton == null) {
+        if (universeRunScanButton == null) {
             return;
         }
         UniverseTableModel activeModel = activeUniverseModel();
         String universeId = activeUniverseId();
         int totalRows = activeModel == null ? 0 : activeModel.getRowCount();
-        int selectedRows = activeModel == null ? 0 : activeModel.selectedRows().size();
         boolean hasRows = totalRows > 0;
 
         universeRunScanButton.setEnabled(hasRows);
-        universeRunSelectedScanButton.setEnabled(hasRows && selectedRows > 0);
-        universeRunSelectedScanButton.setText(
-                selectedRows > 0 ? "Run Selected (" + selectedRows + ")" : "Run Selected"
-        );
 
         if (!hasRows) {
             universeRunScanButton.setToolTipText("Load universe data first.");
-            universeRunSelectedScanButton.setToolTipText("Load universe data first.");
             return;
         }
 
         universeRunScanButton.setToolTipText(
                 "Run deep learning scan for active universe: " + universeId + " (rows: " + totalRows + ")."
         );
-        if (selectedRows > 0) {
-            universeRunSelectedScanButton.setToolTipText(
-                    "Run deep learning scan for selected tickers: " + selectedRows + " (" + universeId + ")."
-            );
-        } else {
-            universeRunSelectedScanButton.setToolTipText(
-                    "Select at least one ticker in the active tab to use this action."
-            );
-        }
     }
 
     private void applyUniverseFilters() {
@@ -1686,15 +1697,37 @@ public final class DPolarisJavaApp {
                 ? maxSelectable
                 : Math.min(maxSelectable, Math.max(1000, selectedCount));
 
-        JTextField horizonsField = new JTextField("1d,3d,5d", 18);
-        JCheckBox optionsModeCheck = new JCheckBox("Options mode", true);
-        optionsModeCheck.setOpaque(false);
-        optionsModeCheck.setForeground(COLOR_TEXT);
-        JTextField strategiesField = new JTextField("single-leg,vertical-spread", 22);
+        // Horizons checkboxes (prediction timeframes)
+        JCheckBox horizon1d = new JCheckBox("1d", true);
+        JCheckBox horizon3d = new JCheckBox("3d", true);
+        JCheckBox horizon5d = new JCheckBox("5d", true);
+        JCheckBox horizon10d = new JCheckBox("10d", false);
+        JCheckBox horizon20d = new JCheckBox("20d", false);
+        JCheckBox[] horizonChecks = {horizon1d, horizon3d, horizon5d, horizon10d, horizon20d};
+        JPanel horizonsPanel = new JPanel(new FlowLayout(FlowLayout.LEFT, 8, 0));
+        horizonsPanel.setOpaque(false);
+        for (JCheckBox cb : horizonChecks) {
+            cb.setOpaque(false);
+            cb.setForeground(COLOR_TEXT);
+            horizonsPanel.add(cb);
+        }
+
+        // Strategy Set checkboxes
+        JCheckBox strategySingleLeg = new JCheckBox("single-leg", true);
+        JCheckBox strategyVerticalSpread = new JCheckBox("vertical-spread", true);
+        JCheckBox strategyCalendarSpread = new JCheckBox("calendar-spread", false);
+        JCheckBox strategyIronCondor = new JCheckBox("iron-condor", false);
+        JCheckBox[] strategyChecks = {strategySingleLeg, strategyVerticalSpread, strategyCalendarSpread, strategyIronCondor};
+        JPanel strategiesPanel = new JPanel(new FlowLayout(FlowLayout.LEFT, 8, 0));
+        strategiesPanel.setOpaque(false);
+        for (JCheckBox cb : strategyChecks) {
+            cb.setOpaque(false);
+            cb.setForeground(COLOR_TEXT);
+            strategiesPanel.add(cb);
+        }
+
         JComboBox<String> riskModeCombo = new JComboBox<>(new String[]{"conservative", "standard", "aggressive"});
         JSpinner maxTickersSpinner = new JSpinner(new SpinnerNumberModel(defaultMaxTickers, 1, maxSelectable, 1));
-        styleInputField(horizonsField);
-        styleInputField(strategiesField);
         styleCombo(riskModeCombo);
         styleSpinner(maxTickersSpinner);
 
@@ -1718,12 +1751,12 @@ public final class DPolarisJavaApp {
         gbc.gridy++;
         panel.add(createFormLabel("Horizons"), gbc);
         gbc.gridx = 1;
-        panel.add(horizonsField, gbc);
+        panel.add(horizonsPanel, gbc);
         gbc.gridx = 0;
         gbc.gridy++;
         panel.add(createFormLabel("Strategy Set"), gbc);
         gbc.gridx = 1;
-        panel.add(strategiesField, gbc);
+        panel.add(strategiesPanel, gbc);
         gbc.gridx = 0;
         gbc.gridy++;
         panel.add(createFormLabel("Risk Mode"), gbc);
@@ -1734,10 +1767,6 @@ public final class DPolarisJavaApp {
         panel.add(createFormLabel("Max Tickers (" + maxSelectable + " max)"), gbc);
         gbc.gridx = 1;
         panel.add(maxTickersSpinner, gbc);
-        gbc.gridx = 0;
-        gbc.gridy++;
-        gbc.gridwidth = 2;
-        panel.add(optionsModeCheck, gbc);
 
         int choice = JOptionPane.showConfirmDialog(
                 frame,
@@ -1751,10 +1780,17 @@ public final class DPolarisJavaApp {
         }
 
         int maxTickers = Math.max(1, Json.asInt(maxTickersSpinner.getValue(), defaultMaxTickers));
-        List<String> horizons = parseCsvTokens(horizonsField.getText());
-        List<String> strategies = parseCsvTokens(strategiesField.getText());
+        List<String> horizons = new ArrayList<>();
+        for (JCheckBox cb : horizonChecks) {
+            if (cb.isSelected()) horizons.add(cb.getText());
+        }
+        if (horizons.isEmpty()) horizons.add("1d"); // default fallback
+        List<String> strategies = new ArrayList<>();
+        for (JCheckBox cb : strategyChecks) {
+            if (cb.isSelected()) strategies.add(cb.getText());
+        }
+        if (strategies.isEmpty()) strategies.add("single-leg"); // default fallback
         String riskMode = String.valueOf(riskModeCombo.getSelectedItem());
-        boolean optionsMode = optionsModeCheck.isSelected();
 
         List<String> baseTickers;
         if (selectedOnly) {
@@ -1792,7 +1828,6 @@ public final class DPolarisJavaApp {
         payload.put("universe", universeId);
         payload.put("runMode", "scan");
         payload.put("horizonConfig", horizonConfig);
-        payload.put("optionsMode", optionsMode);
         payload.put("strategyUniverseConfig", strategyConfig);
         payload.put("riskConfig", riskConfig);
         startDeepLearningScan(payload);
@@ -1801,9 +1836,6 @@ public final class DPolarisJavaApp {
     private void startDeepLearningScan(Map<String, Object> payload) {
         configureClientFromUI();
         universeRunScanButton.setEnabled(false);
-        if (universeRunSelectedScanButton != null) {
-            universeRunSelectedScanButton.setEnabled(false);
-        }
         if (universeMainTabs != null) {
             universeMainTabs.setSelectedIndex(1);
         }
@@ -1851,6 +1883,8 @@ public final class DPolarisJavaApp {
                         throw new IOException("scan start response did not include runId");
                     }
                     lastScanWarningSignature = "";
+                    lastTickerStatusSignature = "";
+                    lastTickerFailureSignature = "";
                     activeScanRunId = runId;
                     scanRunIdField.setText(runId);
                     scanDetailCache.clear();
@@ -2066,6 +2100,7 @@ public final class DPolarisJavaApp {
             );
             rows.add(new ScanResultRow(
                     ticker,
+                    rowStatus.toUpperCase(),
                     score,
                     regime,
                     trend,
@@ -2271,6 +2306,75 @@ public final class DPolarisJavaApp {
                         "Failure summary: failed_tickers=" + failedCount
                                 + ", error_entries=" + errorCount
                 );
+            }
+        }
+
+        // Per-ticker status logging
+        Object tickerStatusObj = findAnyValue(status, "tickerStatus", "ticker_status");
+        if (tickerStatusObj instanceof Map<?, ?> tickerStatusMap && !tickerStatusMap.isEmpty()) {
+            int running = 0;
+            int completed = 0;
+            int failed = 0;
+            int queued = 0;
+            String runningTicker = null;
+            String lastCompletedTicker = null;
+            String lastFailedTicker = null;
+            String lastError = null;
+
+            for (Map.Entry<?, ?> entry : tickerStatusMap.entrySet()) {
+                String tickerKey = String.valueOf(entry.getKey());
+                if (entry.getValue() instanceof Map<?, ?> tickerInfo) {
+                    String tickerState = safeLower(stringOrEmpty(findAnyValue(Json.asObject(tickerInfo), "status", "state")));
+                    switch (tickerState) {
+                        case "running" -> {
+                            running++;
+                            runningTicker = tickerKey;
+                        }
+                        case "completed" -> {
+                            completed++;
+                            lastCompletedTicker = tickerKey;
+                        }
+                        case "failed" -> {
+                            failed++;
+                            lastFailedTicker = tickerKey;
+                            Object err = findAnyValue(Json.asObject(tickerInfo), "error", "message");
+                            if (err != null) {
+                                lastError = String.valueOf(err);
+                            }
+                        }
+                        default -> queued++;
+                    }
+                }
+            }
+
+            // Build per-ticker status line
+            StringBuilder tickerLine = new StringBuilder();
+            tickerLine.append("Ticker status: ");
+            tickerLine.append("completed=").append(completed);
+            tickerLine.append(", running=").append(running);
+            tickerLine.append(", queued=").append(queued);
+            tickerLine.append(", failed=").append(failed);
+            if (runningTicker != null) {
+                tickerLine.append(" | processing: ").append(runningTicker);
+            }
+            if (lastCompletedTicker != null) {
+                tickerLine.append(" | last ok: ").append(lastCompletedTicker);
+            }
+
+            String tickerSignature = tickerLine.toString();
+            if (!tickerSignature.equals(lastTickerStatusSignature)) {
+                lastTickerStatusSignature = tickerSignature;
+                appendScanWarningLog(tickerLine.toString());
+            }
+
+            // Log failures with error details
+            if (lastFailedTicker != null && lastError != null) {
+                String failSig = lastFailedTicker + ":" + lastError;
+                if (!failSig.equals(lastTickerFailureSignature)) {
+                    lastTickerFailureSignature = failSig;
+                    String shortError = lastError.length() > 100 ? lastError.substring(0, 100) + "..." : lastError;
+                    appendScanWarningLog("FAILED " + lastFailedTicker + ": " + shortError);
+                }
             }
         }
     }
@@ -7895,15 +7999,12 @@ public final class DPolarisJavaApp {
         }
         contentLayout.show(contentPanel, viewId);
         styleNavButtonState(navAiManagementButton, VIEW_AI_MANAGEMENT.equals(viewId));
-        styleNavButtonState(navUniverseButton, VIEW_UNIVERSE_SCAN.equals(viewId));
+        styleNavButtonState(navDeepLearningButton, VIEW_DEEP_LEARNING.equals(viewId));
         styleNavButtonState(navDashboardButton, VIEW_DASHBOARD.equals(viewId));
         styleNavButtonState(navTrainingRunsButton, VIEW_TRAINING_RUNS.equals(viewId));
         styleNavButtonState(navPredictionInspectorButton, VIEW_PREDICTION_INSPECTOR.equals(viewId));
-        if (VIEW_UNIVERSE_SCAN.equals(viewId)) {
-            ensureUniverseLoaded(false);
-            if (scanRunsTableModel != null && scanRunsTableModel.getRowCount() == 0) {
-                loadScanRuns(false);
-            }
+        if (VIEW_DEEP_LEARNING.equals(viewId)) {
+            ensureDeepLearningTickersLoaded(false);
         }
         if (VIEW_TRAINING_RUNS.equals(viewId) && runsTableModel != null && runsTableModel.getRowCount() == 0) {
             loadRuns(false);
@@ -7934,6 +8035,11 @@ public final class DPolarisJavaApp {
         styleInlineStatus(daemonStatusValue, "Scheduler: unknown", COLOR_MUTED);
 
         clearLogsButton.addActionListener(e -> backendLogArea.setText(""));
+
+        startBackendButton.addActionListener(e -> startBackendProcess());
+        stopBackendButton.addActionListener(e -> stopBackendProcess());
+        startDaemonButton.addActionListener(e -> startDaemon());
+        stopDaemonButton.addActionListener(e -> stopDaemon());
 
         JLabel pathLabel = createFormLabel("AI Backend Path");
         JLabel noteLabel = createHintLabel(
@@ -9158,26 +9264,10 @@ public final class DPolarisJavaApp {
     private void refreshBackendControls() {
         boolean managedRunning = backendIsRunning();
         boolean externalConnected = backendExternalConnected && !managedRunning && !backendStarting;
+        boolean isRunning = managedRunning || externalConnected;
+        boolean isBusy = backendStarting;
 
-        startBackendButton.setEnabled(!managedRunning && !backendStarting && !externalConnected);
-        stopBackendButton.setEnabled(managedRunning || externalConnected);
-        startDaemonButton.setEnabled(!backendStarting);
-        stopDaemonButton.setEnabled(!backendStarting);
-
-        if (externalConnected) {
-            startBackendButton.setToolTipText("Backend is already connected externally.");
-            stopBackendButton.setToolTipText("Stop connected backend on current host/port.");
-        } else if (managedRunning) {
-            startBackendButton.setToolTipText("Backend is already running.");
-            stopBackendButton.setToolTipText("Stop the backend process started by this app.");
-        } else if (backendStarting) {
-            startBackendButton.setToolTipText("Backend operation in progress.");
-            stopBackendButton.setToolTipText("Wait for backend operation to complete.");
-        } else {
-            startBackendButton.setToolTipText("Start backend from AI path.");
-            stopBackendButton.setToolTipText("No managed backend process is running.");
-        }
-
+        // Update status label
         if (backendStatusValue != null) {
             if (backendStarting) {
                 styleInlineStatus(backendStatusValue, "Backend: starting...", COLOR_WARNING);
@@ -9189,16 +9279,39 @@ public final class DPolarisJavaApp {
                 styleInlineStatus(backendStatusValue, "Backend: stopped", COLOR_MUTED);
             }
         }
+
+        // Update System Control panel buttons
+        if (systemBackendStartButton != null) {
+            systemBackendStartButton.setEnabled(!isRunning && !isBusy);
+        }
+        if (systemBackendStopButton != null) {
+            systemBackendStopButton.setEnabled(isRunning && !isBusy);
+        }
+        if (systemBackendRestartButton != null) {
+            systemBackendRestartButton.setEnabled(isRunning && !isBusy);
+        }
     }
 
     private void startBackendProcess() {
-        if (backendStarting || backendIsRunning()) {
-            appendBackendLog(ts() + " | Backend is already running or starting.");
+        appendBackendLog(ts() + " | Start Backend button clicked");
+        if (backendStarting) {
+            appendBackendLog(ts() + " | Backend is already starting, please wait...");
+            return;
+        }
+        if (backendIsRunning()) {
+            appendBackendLog(ts() + " | Backend process is already running.");
             return;
         }
 
-        String rawPath = backendPathField.getText().trim();
-        if (rawPath.isEmpty()) {
+        String rawPath;
+        if (backendPathField != null) {
+            rawPath = backendPathField.getText().trim();
+        } else if (systemConfigAiPathField != null) {
+            rawPath = systemConfigAiPathField.getText().trim();
+        } else {
+            rawPath = resolveConfiguredAiPath();
+        }
+        if (rawPath == null || rawPath.isEmpty()) {
             JOptionPane.showMessageDialog(frame, "Please enter the backend project path.", "Validation",
                     JOptionPane.WARNING_MESSAGE);
             return;
@@ -9210,7 +9323,9 @@ public final class DPolarisJavaApp {
                     JOptionPane.ERROR_MESSAGE);
             return;
         }
-        backendPathField.setText(backendPath);
+        if (backendPathField != null) {
+            backendPathField.setText(backendPath);
+        }
 
         configureClientFromUI();
         backendPortConflictLogged = false;
@@ -9384,29 +9499,21 @@ public final class DPolarisJavaApp {
 
     private void stopBackendProcess() {
         Process process = backendProcess;
-        if (backendStarting && (process == null || !process.isAlive())) {
+        if (backendStarting) {
             appendBackendLog(ts() + " | Backend operation already in progress.");
             return;
         }
-        boolean externalConnected = backendExternalConnected && (process == null || !process.isAlive()) && !backendStarting;
-        if (externalConnected) {
-            stopExternalBackendByPort();
-            return;
-        }
-        if ((process == null || !process.isAlive()) && !backendStarting) {
+
+        // If we have a managed process, stop it
+        if (process != null && process.isAlive()) {
+            backendStarting = false;
+            backendExternalConnected = false;
             refreshBackendControls();
-            return;
-        }
+            appendBackendLog(ts() + " | Stopping managed backend process...");
 
-        backendStarting = false;
-        backendExternalConnected = false;
-        refreshBackendControls();
-        appendBackendLog(ts() + " | Stopping backend process...");
-
-        SwingWorker<Void, Void> worker = new SwingWorker<>() {
-            @Override
-            protected Void doInBackground() {
-                if (process != null && process.isAlive()) {
+            SwingWorker<Void, Void> worker = new SwingWorker<>() {
+                @Override
+                protected Void doInBackground() {
                     process.destroy();
                     try {
                         if (!process.waitFor(5, TimeUnit.SECONDS)) {
@@ -9417,20 +9524,23 @@ public final class DPolarisJavaApp {
                     } catch (InterruptedException interrupted) {
                         Thread.currentThread().interrupt();
                     }
+                    return null;
                 }
-                return null;
-            }
 
-            @Override
-            protected void done() {
-                backendProcess = null;
-                backendExternalConnected = false;
-                refreshBackendControls();
-                appendBackendLog(ts() + " | Backend stopped.");
-                checkConnection();
-            }
-        };
-        worker.execute();
+                @Override
+                protected void done() {
+                    backendProcess = null;
+                    backendExternalConnected = false;
+                    refreshBackendControls();
+                    appendBackendLog(ts() + " | Managed backend process stopped.");
+                }
+            };
+            worker.execute();
+            return;
+        }
+
+        // Otherwise, try to stop any process on the port
+        stopExternalBackendByPort();
     }
 
     private void stopExternalBackendByPort() {
@@ -9612,6 +9722,10 @@ public final class DPolarisJavaApp {
     }
 
     private void refreshTrainingControls() {
+        // Training panel was removed - skip if controls are null
+        if (modeCombo == null || deepModelCombo == null || epochsSpinner == null) {
+            return;
+        }
         boolean deepMode = MODE_DEEP.equals(modeCombo.getSelectedItem());
         deepModelCombo.setEnabled(deepMode);
         epochsSpinner.setEnabled(deepMode);
@@ -11578,6 +11692,7 @@ public final class DPolarisJavaApp {
         private static final String[] COLUMNS = {
                 "Expand",
                 "Ticker",
+                "Status",
                 "Overall Score",
                 "Regime",
                 "Trend/Momentum",
@@ -11611,14 +11726,15 @@ public final class DPolarisJavaApp {
             return switch (columnIndex) {
                 case 0 -> row.ticker().equals(expandedTicker) ? "▼" : "▶";
                 case 1 -> row.ticker();
-                case 2 -> Double.isNaN(row.overallScore()) ? "—" : String.format("%.4f", row.overallScore());
-                case 3 -> row.regime();
-                case 4 -> row.trendMomentum();
-                case 5 -> row.volatilityIv();
-                case 6 -> row.topStrategy();
-                case 7 -> Double.isNaN(row.confidence()) ? "—" : String.format("%.3f", row.confidence());
-                case 8 -> row.warningsCount();
-                case 9 -> row.updatedAt();
+                case 2 -> row.status();
+                case 3 -> Double.isNaN(row.overallScore()) ? "—" : String.format("%.4f", row.overallScore());
+                case 4 -> row.regime();
+                case 5 -> row.trendMomentum();
+                case 6 -> row.volatilityIv();
+                case 7 -> row.topStrategy();
+                case 8 -> Double.isNaN(row.confidence()) ? "—" : String.format("%.3f", row.confidence());
+                case 9 -> row.warningsCount();
+                case 10 -> row.updatedAt();
                 default -> "";
             };
         }
@@ -11643,6 +11759,7 @@ public final class DPolarisJavaApp {
 
     private record ScanResultRow(
             String ticker,
+            String status,
             double overallScore,
             String regime,
             String trendMomentum,
@@ -12060,6 +12177,10 @@ public final class DPolarisJavaApp {
     }
 
     private void appendBackendLog(String line) {
+        if (backendLogArea == null) {
+            appendSystemControlLog(line);
+            return;
+        }
         SwingUtilities.invokeLater(() -> {
             backendLogArea.append(line + "\n");
             backendLogArea.setCaretPosition(backendLogArea.getDocument().getLength());

@@ -45,7 +45,7 @@ public final class ControlCenterLauncher {
         // Create main frame
         JFrame frame = new JFrame("dPolaris Control Center");
         frame.setDefaultCloseOperation(WindowConstants.DO_NOTHING_ON_CLOSE);
-        frame.setSize(1200, 800);
+        frame.setSize(1400, 900);
         frame.setMinimumSize(new Dimension(900, 600));
         frame.setLocationRelativeTo(null);
         frame.getContentPane().setBackground(COLOR_BG);

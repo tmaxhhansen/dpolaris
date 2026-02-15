@@ -10,13 +10,15 @@ import java.util.Properties;
 final class SystemControlConfig {
     static final String DEFAULT_HOST = "127.0.0.1";
     static final int DEFAULT_PORT = 8420;
-    static final String DEFAULT_AI_REPO_PATH = "~/my-git/dPolaris_ai";
+    static final String DEFAULT_AI_REPO_PATH = "~/my-git/dpolaris_ai";
     static final String DEFAULT_OPS_REPO_PATH = "~/my-git/dPolaris_ops";
+    static final String DEFAULT_DEVICE_PREFERENCE = "auto";
 
     private static final String KEY_HOST = "backend.host";
     private static final String KEY_PORT = "backend.port";
     private static final String KEY_AI_PATH = "repo.ai";
     private static final String KEY_OPS_PATH = "repo.ops";
+    private static final String KEY_DEVICE_PREFERENCE = "deep_learning.device_preference";
 
     private SystemControlConfig() {
     }
@@ -38,7 +40,8 @@ final class SystemControlConfig {
         int port = parsePort(props.getProperty(KEY_PORT));
         String aiPath = normalizePath(props.getProperty(KEY_AI_PATH), DEFAULT_AI_REPO_PATH);
         String opsPath = normalizePath(props.getProperty(KEY_OPS_PATH), DEFAULT_OPS_REPO_PATH);
-        return new ConfigValues(host, port, aiPath, opsPath);
+        String devicePreference = normalizeDevicePreference(props.getProperty(KEY_DEVICE_PREFERENCE));
+        return new ConfigValues(host, port, aiPath, opsPath, devicePreference);
     }
 
     static void save(ConfigValues values) throws IOException {
@@ -51,6 +54,7 @@ final class SystemControlConfig {
         props.setProperty(KEY_PORT, String.valueOf(safe.backendPort()));
         props.setProperty(KEY_AI_PATH, safe.aiRepoPath());
         props.setProperty(KEY_OPS_PATH, safe.opsRepoPath());
+        props.setProperty(KEY_DEVICE_PREFERENCE, safe.devicePreference());
 
         try (OutputStream out = Files.newOutputStream(configPath)) {
             props.store(out, "dPolaris Control Center");
@@ -65,11 +69,18 @@ final class SystemControlConfig {
         int port = values.backendPort() > 0 ? values.backendPort() : DEFAULT_PORT;
         String aiPath = normalizePath(values.aiRepoPath(), DEFAULT_AI_REPO_PATH);
         String opsPath = normalizePath(values.opsRepoPath(), DEFAULT_OPS_REPO_PATH);
-        return new ConfigValues(host, port, aiPath, opsPath);
+        String devicePreference = normalizeDevicePreference(values.devicePreference());
+        return new ConfigValues(host, port, aiPath, opsPath, devicePreference);
     }
 
     static ConfigValues defaults() {
-        return new ConfigValues(DEFAULT_HOST, DEFAULT_PORT, DEFAULT_AI_REPO_PATH, DEFAULT_OPS_REPO_PATH);
+        return new ConfigValues(
+                DEFAULT_HOST,
+                DEFAULT_PORT,
+                DEFAULT_AI_REPO_PATH,
+                DEFAULT_OPS_REPO_PATH,
+                DEFAULT_DEVICE_PREFERENCE
+        );
     }
 
     private static Path configPath() {
@@ -102,6 +113,23 @@ final class SystemControlConfig {
         return path.trim();
     }
 
-    record ConfigValues(String backendHost, int backendPort, String aiRepoPath, String opsRepoPath) {
+    private static String normalizeDevicePreference(String value) {
+        if (value == null || value.isBlank()) {
+            return DEFAULT_DEVICE_PREFERENCE;
+        }
+        String lowered = value.trim().toLowerCase();
+        return switch (lowered) {
+            case "cuda", "mps", "cpu" -> lowered;
+            default -> DEFAULT_DEVICE_PREFERENCE;
+        };
+    }
+
+    record ConfigValues(
+            String backendHost,
+            int backendPort,
+            String aiRepoPath,
+            String opsRepoPath,
+            String devicePreference
+    ) {
     }
 }
