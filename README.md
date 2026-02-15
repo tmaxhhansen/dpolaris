@@ -26,24 +26,57 @@ It communicates with the existing Python backend (`dpolaris_ai`) over HTTP.
 ## Prerequisites
 
 - Java 17+ installed
-- Python backend project available locally (default path auto-detected):
-  - `~/my-git/dpolaris_ai`
-  - `~/my-git/dPolaris_ai`
-  - `~/dpolaris_ai`
+- Python backend project available locally at `~/my-git/dpolaris_ai`
 
-## Run (macOS/Linux)
+## Quick Start (macOS)
 
+### Run Full App
 ```bash
-bash run.sh
+cd ~/my-git/dpolaris
+./gradlew run
 ```
 
-## Run In IntelliJ
+### Run Control Center (Backend + Deep Learning focused)
+```bash
+cd ~/my-git/dpolaris
+./gradlew run -PmainClass=com.dpolaris.javaapp.ControlCenterLauncher
+```
 
-1. Open `/Users/darrenwon/my-git/dpolaris` as a project.
+Or use the shell scripts:
+```bash
+./run.sh
+```
+
+## Features
+
+### Backend Control (One-Click)
+- **Start Backend**: Launches `python -m cli.main server --host 127.0.0.1 --port 8420`
+- **Stop Backend**: Terminates the process Java started
+- **Reset & Restart (Clean)**: Stops, waits for port free, restarts, verifies `/health` within 30s
+- Device selection: `auto` / `cpu` / `mps` (Apple Silicon) / `cuda`
+
+### Deep Learning Training
+- Universe dropdown (nasdaq_top_500, wsb_favorites, combined)
+- Ticker table with filter (calls `/api/universe/{name}`)
+- Train button: POST `/api/jobs/deep-learning/train` with symbol, model, epochs
+- Job monitor: polls GET `/api/jobs/{id}` every 2s while running
+- Log viewer: shows last N lines from job logs
+- Predict button: calls `/api/deep-learning/predict/{symbol}`
+
+### Diagnostics
+- Backend process status (state, PID, uptime)
+- API health check
+- Deep learning device info
+- System information (OS, Java, memory)
+
+## Run in IntelliJ
+
+1. Open `~/my-git/dpolaris` as a project.
 2. IntelliJ will detect Gradle (`build.gradle`). Click **Load Gradle Project**.
 3. Run either:
    - Gradle task: `application > run`, or
-   - Main class: `com.dpolaris.javaapp.DPolarisJavaApp` (green run button).
+   - Main class: `com.dpolaris.javaapp.DPolarisJavaApp` (full app), or
+   - Main class: `com.dpolaris.javaapp.ControlCenterLauncher` (control center)
 
 Then in the app:
 
@@ -63,7 +96,7 @@ run.bat
 ### macOS/Linux
 
 ```bash
-bash build.sh
+./build.sh
 java -jar build/dpolaris-java-app.jar
 ```
 
@@ -79,19 +112,30 @@ java -jar build\dpolaris-java-app.jar
 Create a `.app` bundle:
 
 ```bash
-bash package-mac-app.sh
+./package-mac-app.sh
 ```
 
 Output:
-
 - `build/macos-app/dPolarisJava.app`
 
 Create a `.dmg` installer:
 
 ```bash
-bash package-mac-dmg.sh
+./package-mac-dmg.sh
 ```
 
 Output:
-
 - `build/macos-dmg/dPolarisJava-1.0.0.dmg`
+
+## Architecture
+
+```
+src/main/java/com/dpolaris/javaapp/
+├── DPolarisJavaApp.java          # Full application main class
+├── ControlCenterLauncher.java    # Standalone control center launcher
+├── BackendProcessManager.java    # Direct process lifecycle management
+├── BackendControlPanel.java      # Backend control UI panel
+├── DeepLearningPanel.java        # Deep learning training UI
+├── ApiClient.java                # HTTP client for backend API
+└── ...
+```

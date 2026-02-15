@@ -10,9 +10,34 @@ java {
 
 application {
     mainClass = 'com.dpolaris.javaapp.DPolarisJavaApp'
+
+    // macOS: Enable AWT/Swing on the main thread
+    applicationDefaultJvmArgs = [
+        '-Dapple.laf.useScreenMenuBar=true',
+        '-Dapple.awt.application.appearance=system',
+        '-Dapple.awt.application.name=dPolaris',
+        '-Dfile.encoding=UTF-8'
+    ]
 }
 
 tasks.withType(JavaCompile).configureEach {
     options.encoding = 'UTF-8'
 }
 
+// Ensure run task works properly on macOS
+tasks.named('run') {
+    standardInput = System.in
+    // Prevent hanging on macOS
+    doFirst {
+        if (System.getProperty('os.name').toLowerCase().contains('mac')) {
+            jvmArgs += ['-XstartOnFirstThread']
+        }
+    }
+}
+
+// Create a task to run in headless mode for testing
+tasks.register('runHeadless', JavaExec) {
+    mainClass = application.mainClass
+    classpath = sourceSets.main.runtimeClasspath
+    jvmArgs = ['-Djava.awt.headless=true']
+}

@@ -345,7 +345,7 @@ final class ApiClient {
         return Json.asObject(response);
     }
 
-    private Object request(String method, String path, String body, int timeoutSeconds)
+    Object request(String method, String path, String body, int timeoutSeconds)
             throws IOException, InterruptedException {
         HttpRequest.Builder builder = HttpRequest.newBuilder()
                 .uri(URI.create(baseUrl() + path))

@@ -8634,7 +8634,7 @@ public final class DPolarisJavaApp {
         }
 
         SystemControlConfig.ConfigValues values = SystemControlConfig.sanitize(
-                new SystemControlConfig.ConfigValues(host, port, aiPath, opsPath)
+                new SystemControlConfig.ConfigValues(host, port, aiPath, opsPath, SystemControlConfig.DEFAULT_DEVICE_PREFERENCE)
         );
         try {
             SystemControlConfig.save(values);
