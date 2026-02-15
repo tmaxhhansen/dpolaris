@@ -17,6 +17,8 @@ import java.awt.GridBagLayout;
 import java.awt.Insets;
 import java.awt.Rectangle;
 import java.awt.RenderingHints;
+import java.awt.Toolkit;
+import java.awt.datatransfer.StringSelection;
 import java.awt.event.MouseAdapter;
 import java.awt.event.MouseEvent;
 import java.awt.event.WindowAdapter;
@@ -116,6 +118,7 @@ public final class DPolarisJavaApp {
     private final RunsService runsService = new RunsService(apiClient);
     private final ScanService scanService = new ScanService(apiClient);
     private final AuditLogStore auditLogStore = new AuditLogStore();
+    private final SystemControlConfig.ConfigValues initialControlConfig;
     private final Object trainingAuditLock = new Object();
     private final Font uiFont;
     private final Font titleFont;
@@ -126,6 +129,36 @@ public final class DPolarisJavaApp {
     private final JTextField portField;
     private final JLabel connectionLabel;
     private final JButton checkConnectionButton;
+    private JPanel startupBannerPanel;
+    private JLabel startupBannerLabel;
+    private JButton startupBannerStartButton;
+
+    private JTextField systemConfigHostField;
+    private JTextField systemConfigPortField;
+    private JTextField systemConfigAiPathField;
+    private JTextField systemConfigOpsPathField;
+    private JButton systemConfigSaveButton;
+    private JButton systemConfigReloadButton;
+    private JLabel systemConfigStatusLabel;
+
+    private JButton systemBackendStartButton;
+    private JButton systemBackendStopButton;
+    private JButton systemBackendRestartButton;
+    private JButton systemBackendStatusButton;
+    private JButton systemBackendResetButton;
+    private JLabel systemBackendActionLabel;
+    private JTextArea systemBackendStatusArea;
+
+    private JButton systemOpsStartButton;
+    private JButton systemOpsStopButton;
+    private JButton systemOpsRestartButton;
+    private JButton systemOpsStatusButton;
+    private JLabel systemOpsActionLabel;
+    private JTextArea systemOpsStatusArea;
+
+    private JButton systemCopyDiagnosticsButton;
+    private JLabel systemControlProgressLabel;
+    private JTextArea systemControlLogArea;
 
     private JTextField backendPathField;
     private JButton startBackendButton;
@@ -365,6 +398,12 @@ public final class DPolarisJavaApp {
     private volatile String activeTrainingJobId;
     private volatile boolean activeTrainingAuditFinalized;
     private volatile String lastScanWarningSignature = "";
+    private volatile boolean systemControlActionInFlight = false;
+    private volatile String lastBackendHealth = "unknown";
+    private volatile String lastBackendRestart = "—";
+    private volatile Map<String, Object> lastBackendControlStatus = new LinkedHashMap<>();
+    private volatile Map<String, Object> lastOpsControlStatus = new LinkedHashMap<>();
+    private volatile javax.swing.Timer systemStatusTimer;
 
     public static void main(String[] args) {
         SwingUtilities.invokeLater(() -> {
@@ -385,6 +424,7 @@ public final class DPolarisJavaApp {
         uiFont = resolveUiFont(Font.PLAIN, 13);
         titleFont = resolveUiFont(Font.BOLD, 22);
         monoFont = resolveMonoFont(13);
+        initialControlConfig = SystemControlConfig.load();
 
         frame = new JFrame("dPolaris Java");
         frame.setDefaultCloseOperation(WindowConstants.EXIT_ON_CLOSE);
@@ -400,8 +440,8 @@ public final class DPolarisJavaApp {
                 new EmptyBorder(12, 14, 12, 14)
         ));
 
-        hostField = new JTextField("127.0.0.1", 14);
-        portField = new JTextField("8420", 6);
+        hostField = new JTextField(initialControlConfig.backendHost(), 14);
+        portField = new JTextField(String.valueOf(initialControlConfig.backendPort()), 6);
         checkConnectionButton = new JButton("Check Connection");
         connectionLabel = new JLabel("Unknown", JLabel.CENTER);
 
@@ -435,7 +475,9 @@ public final class DPolarisJavaApp {
         JPanel topWrap = new JPanel(new BorderLayout());
         topWrap.setBackground(COLOR_BG);
         topWrap.setBorder(new EmptyBorder(10, 10, 4, 10));
-        topWrap.add(topPanel, BorderLayout.CENTER);
+        topWrap.add(topPanel, BorderLayout.NORTH);
+        startupBannerPanel = createStartupBannerPanel();
+        topWrap.add(startupBannerPanel, BorderLayout.SOUTH);
         frame.add(topWrap, BorderLayout.NORTH);
 
         JPanel centerWrap = new JPanel(new BorderLayout(10, 0));
@@ -475,7 +517,9 @@ public final class DPolarisJavaApp {
         frame.addWindowListener(new WindowAdapter() {
             @Override
             public void windowClosing(WindowEvent e) {
-                stopBackendProcess();
+                if (systemStatusTimer != null) {
+                    systemStatusTimer.stop();
+                }
             }
         });
 
@@ -544,6 +588,7 @@ public final class DPolarisJavaApp {
     private JPanel createAiManagementPanel() {
         JTabbedPane tabs = new JTabbedPane();
         styleTabbedPane(tabs);
+        tabs.addTab("System Control", createSystemControlPanel());
         tabs.addTab("Backend Control", createBackendControlPanel());
         tabs.addTab("Training", createTrainingPanel());
         tabs.addTab("Backend Data", createDataPanel());
@@ -552,6 +597,200 @@ public final class DPolarisJavaApp {
         wrap.setBackground(COLOR_BG);
         wrap.add(tabs, BorderLayout.CENTER);
         return wrap;
+    }
+
+    private JPanel createStartupBannerPanel() {
+        JPanel banner = new JPanel(new BorderLayout(8, 0));
+        banner.setBackground(new Color(50, 38, 18));
+        banner.setBorder(new CompoundBorder(
+                new LineBorder(COLOR_WARNING, 1, true),
+                new EmptyBorder(8, 10, 8, 10)
+        ));
+
+        startupBannerLabel = new JLabel("Backend is not healthy. Start it with one click.");
+        startupBannerLabel.setForeground(new Color(255, 226, 170));
+        startupBannerLabel.setFont(uiFont.deriveFont(Font.BOLD, 12f));
+        banner.add(startupBannerLabel, BorderLayout.CENTER);
+
+        startupBannerStartButton = new JButton("Start Backend Now");
+        styleButton(startupBannerStartButton, true);
+        startupBannerStartButton.addActionListener(e -> runBackendControlAction("start", true));
+        banner.add(startupBannerStartButton, BorderLayout.EAST);
+
+        banner.setVisible(false);
+        return banner;
+    }
+
+    private JPanel createSystemControlPanel() {
+        JPanel root = new JPanel(new BorderLayout(8, 8));
+        root.setBackground(COLOR_BG);
+        root.setBorder(new EmptyBorder(8, 0, 0, 0));
+
+        JPanel topStack = new JPanel();
+        topStack.setOpaque(false);
+        topStack.setLayout(new BoxLayout(topStack, BoxLayout.Y_AXIS));
+
+        JPanel configCard = createCardPanel();
+        configCard.add(createSectionHeader("Paths & Ports"), BorderLayout.NORTH);
+        systemConfigHostField = new JTextField(initialControlConfig.backendHost(), 14);
+        systemConfigPortField = new JTextField(String.valueOf(initialControlConfig.backendPort()), 6);
+        systemConfigAiPathField = new JTextField(initialControlConfig.aiRepoPath(), 40);
+        systemConfigOpsPathField = new JTextField(initialControlConfig.opsRepoPath(), 40);
+        systemConfigSaveButton = new JButton("Save Config");
+        systemConfigReloadButton = new JButton("Reload Saved");
+        systemConfigStatusLabel = new JLabel();
+        styleInputField(systemConfigHostField);
+        styleInputField(systemConfigPortField);
+        styleInputField(systemConfigAiPathField);
+        styleInputField(systemConfigOpsPathField);
+        styleButton(systemConfigSaveButton, true);
+        styleButton(systemConfigReloadButton, false);
+        styleInlineStatus(systemConfigStatusLabel, "Config: loaded", COLOR_MUTED);
+
+        JPanel configRowOne = new JPanel(new FlowLayout(FlowLayout.LEFT, 8, 0));
+        configRowOne.setOpaque(false);
+        configRowOne.add(createFormLabel("Backend Host"));
+        configRowOne.add(systemConfigHostField);
+        configRowOne.add(createFormLabel("Port"));
+        configRowOne.add(systemConfigPortField);
+
+        JPanel configRowTwo = new JPanel(new FlowLayout(FlowLayout.LEFT, 8, 0));
+        configRowTwo.setOpaque(false);
+        configRowTwo.add(createFormLabel("AI Repo"));
+        configRowTwo.add(systemConfigAiPathField);
+
+        JPanel configRowThree = new JPanel(new FlowLayout(FlowLayout.LEFT, 8, 0));
+        configRowThree.setOpaque(false);
+        configRowThree.add(createFormLabel("Ops Repo"));
+        configRowThree.add(systemConfigOpsPathField);
+
+        JPanel configActions = new JPanel(new FlowLayout(FlowLayout.LEFT, 8, 0));
+        configActions.setOpaque(false);
+        configActions.add(systemConfigSaveButton);
+        configActions.add(systemConfigReloadButton);
+        configActions.add(systemConfigStatusLabel);
+
+        JPanel configBody = new JPanel();
+        configBody.setOpaque(false);
+        configBody.setLayout(new BoxLayout(configBody, BoxLayout.Y_AXIS));
+        configBody.add(configRowOne);
+        configBody.add(Box.createVerticalStrut(6));
+        configBody.add(configRowTwo);
+        configBody.add(Box.createVerticalStrut(6));
+        configBody.add(configRowThree);
+        configBody.add(Box.createVerticalStrut(6));
+        configBody.add(configActions);
+        configCard.add(configBody, BorderLayout.CENTER);
+
+        JPanel backendCard = createCardPanel();
+        backendCard.add(createSectionHeader("Backend Lifecycle"), BorderLayout.NORTH);
+        systemBackendStartButton = new JButton("Start");
+        systemBackendStopButton = new JButton("Stop");
+        systemBackendRestartButton = new JButton("Restart");
+        systemBackendStatusButton = new JButton("Status");
+        systemBackendResetButton = new JButton("Reset&Restart (clean)");
+        systemBackendActionLabel = new JLabel();
+        styleButton(systemBackendStartButton, true);
+        styleButton(systemBackendStopButton, false);
+        styleButton(systemBackendRestartButton, false);
+        styleButton(systemBackendStatusButton, false);
+        styleButton(systemBackendResetButton, false);
+        styleInlineStatus(systemBackendActionLabel, "Backend action: idle", COLOR_MUTED);
+
+        JPanel backendActions = new JPanel(new FlowLayout(FlowLayout.LEFT, 8, 0));
+        backendActions.setOpaque(false);
+        backendActions.add(systemBackendStartButton);
+        backendActions.add(systemBackendStopButton);
+        backendActions.add(systemBackendRestartButton);
+        backendActions.add(systemBackendStatusButton);
+        backendActions.add(systemBackendResetButton);
+        backendActions.add(systemBackendActionLabel);
+
+        systemBackendStatusArea = createLogArea();
+        systemBackendStatusArea.setRows(7);
+        JScrollPane backendStatusScroll = createLogScrollPane(systemBackendStatusArea, "Backend Status");
+
+        JPanel backendBody = new JPanel(new BorderLayout(0, 8));
+        backendBody.setOpaque(false);
+        backendBody.add(backendActions, BorderLayout.NORTH);
+        backendBody.add(backendStatusScroll, BorderLayout.CENTER);
+        backendCard.add(backendBody, BorderLayout.CENTER);
+
+        JPanel opsCard = createCardPanel();
+        opsCard.add(createSectionHeader("Orchestrator Lifecycle"), BorderLayout.NORTH);
+        systemOpsStartButton = new JButton("Start");
+        systemOpsStopButton = new JButton("Stop");
+        systemOpsRestartButton = new JButton("Restart");
+        systemOpsStatusButton = new JButton("Status");
+        systemOpsActionLabel = new JLabel();
+        styleButton(systemOpsStartButton, true);
+        styleButton(systemOpsStopButton, false);
+        styleButton(systemOpsRestartButton, false);
+        styleButton(systemOpsStatusButton, false);
+        styleInlineStatus(systemOpsActionLabel, "Orchestrator action: idle", COLOR_MUTED);
+
+        JPanel opsActions = new JPanel(new FlowLayout(FlowLayout.LEFT, 8, 0));
+        opsActions.setOpaque(false);
+        opsActions.add(systemOpsStartButton);
+        opsActions.add(systemOpsStopButton);
+        opsActions.add(systemOpsRestartButton);
+        opsActions.add(systemOpsStatusButton);
+        opsActions.add(systemOpsActionLabel);
+
+        systemOpsStatusArea = createLogArea();
+        systemOpsStatusArea.setRows(6);
+        JScrollPane opsStatusScroll = createLogScrollPane(systemOpsStatusArea, "Orchestrator Status");
+
+        JPanel opsBody = new JPanel(new BorderLayout(0, 8));
+        opsBody.setOpaque(false);
+        opsBody.add(opsActions, BorderLayout.NORTH);
+        opsBody.add(opsStatusScroll, BorderLayout.CENTER);
+        opsCard.add(opsBody, BorderLayout.CENTER);
+
+        JPanel diagnosticsCard = createCardPanel();
+        diagnosticsCard.add(createSectionHeader("Diagnostics"), BorderLayout.NORTH);
+        systemCopyDiagnosticsButton = new JButton("Copy Diagnostics");
+        systemControlProgressLabel = new JLabel();
+        styleButton(systemCopyDiagnosticsButton, false);
+        styleInlineStatus(systemControlProgressLabel, "Ready", COLOR_MUTED);
+        JPanel diagnosticsBody = new JPanel(new FlowLayout(FlowLayout.LEFT, 8, 0));
+        diagnosticsBody.setOpaque(false);
+        diagnosticsBody.add(systemCopyDiagnosticsButton);
+        diagnosticsBody.add(systemControlProgressLabel);
+        diagnosticsCard.add(diagnosticsBody, BorderLayout.CENTER);
+
+        topStack.add(configCard);
+        topStack.add(Box.createVerticalStrut(8));
+        topStack.add(backendCard);
+        topStack.add(Box.createVerticalStrut(8));
+        topStack.add(opsCard);
+        topStack.add(Box.createVerticalStrut(8));
+        topStack.add(diagnosticsCard);
+
+        systemControlLogArea = createLogArea();
+        JScrollPane logs = createLogScrollPane(systemControlLogArea, "System Control Activity");
+
+        root.add(topStack, BorderLayout.NORTH);
+        root.add(logs, BorderLayout.CENTER);
+
+        applyConfigToUi(initialControlConfig);
+        renderBackendControlStatus(new LinkedHashMap<>(), "No backend status loaded yet.");
+        renderOrchestratorStatus(new LinkedHashMap<>(), "No orchestrator status loaded yet.");
+
+        systemConfigSaveButton.addActionListener(e -> saveSystemControlConfig());
+        systemConfigReloadButton.addActionListener(e -> reloadSystemControlConfig());
+        systemBackendStartButton.addActionListener(e -> runBackendControlAction("start", false));
+        systemBackendStopButton.addActionListener(e -> runBackendControlAction("stop", false));
+        systemBackendRestartButton.addActionListener(e -> runBackendControlAction("restart", false));
+        systemBackendStatusButton.addActionListener(e -> runBackendControlAction("status", false));
+        systemBackendResetButton.addActionListener(e -> runBackendControlAction("reset", false));
+        systemOpsStartButton.addActionListener(e -> runOrchestratorControlAction("start"));
+        systemOpsStopButton.addActionListener(e -> runOrchestratorControlAction("stop"));
+        systemOpsRestartButton.addActionListener(e -> runOrchestratorControlAction("restart"));
+        systemOpsStatusButton.addActionListener(e -> runOrchestratorControlAction("status"));
+        systemCopyDiagnosticsButton.addActionListener(e -> copySystemDiagnostics());
+
+        return root;
     }
 
     private JPanel createUniverseScanPanel() {
@@ -8285,6 +8524,8 @@ public final class DPolarisJavaApp {
         frame.setLocationRelativeTo(null);
         frame.setVisible(true);
         checkConnection();
+        refreshSystemStatuses(true);
+        startSystemStatusTimer();
     }
 
     private void configureClientFromUI() {
@@ -8324,17 +8565,558 @@ public final class DPolarisJavaApp {
                 if (connected) {
                     styleStatusLabel(connectionLabel, "Connected", COLOR_SUCCESS);
                     backendExternalConnected = !backendIsRunning() && !backendStarting;
+                    lastBackendHealth = "healthy at " + ts();
                 } else {
                     styleStatusLabel(connectionLabel, "Connection failed", COLOR_DANGER);
                     backendExternalConnected = false;
+                    lastBackendHealth = "unhealthy at " + ts();
                 }
                 refreshBackendControls();
+                refreshStartupBanner(connected);
             }
         };
         worker.execute();
     }
 
+    private void startSystemStatusTimer() {
+        if (systemStatusTimer != null) {
+            systemStatusTimer.stop();
+        }
+        systemStatusTimer = new javax.swing.Timer(15000, e -> refreshSystemStatuses(false));
+        systemStatusTimer.setRepeats(true);
+        systemStatusTimer.start();
+    }
+
+    private void refreshStartupBanner(boolean backendHealthy) {
+        if (startupBannerPanel == null) {
+            return;
+        }
+        startupBannerPanel.setVisible(!backendHealthy);
+        if (startupBannerStartButton != null) {
+            startupBannerStartButton.setEnabled(!backendHealthy && !systemControlActionInFlight);
+        }
+        if (startupBannerLabel != null) {
+            startupBannerLabel.setText(backendHealthy
+                    ? "Backend healthy."
+                    : "Backend is not healthy at " + currentHostPort() + ". Start it with one click.");
+        }
+    }
+
+    private void reloadSystemControlConfig() {
+        SystemControlConfig.ConfigValues loaded = SystemControlConfig.load();
+        applyConfigToUi(loaded);
+        appendSystemControlLog(ts() + " | Loaded config from user home.");
+        if (systemConfigStatusLabel != null) {
+            styleInlineStatus(systemConfigStatusLabel, "Config: loaded from file", COLOR_SUCCESS);
+        }
+        checkConnection();
+        refreshSystemStatuses(false);
+    }
+
+    private void saveSystemControlConfig() {
+        String host = systemConfigHostField == null ? "" : systemConfigHostField.getText().trim();
+        String portText = systemConfigPortField == null ? "" : systemConfigPortField.getText().trim();
+        String aiPath = systemConfigAiPathField == null ? "" : systemConfigAiPathField.getText().trim();
+        String opsPath = systemConfigOpsPathField == null ? "" : systemConfigOpsPathField.getText().trim();
+
+        int port;
+        try {
+            port = Integer.parseInt(portText);
+            if (port <= 0) {
+                throw new NumberFormatException("Port must be positive");
+            }
+        } catch (NumberFormatException ex) {
+            if (systemConfigStatusLabel != null) {
+                styleInlineStatus(systemConfigStatusLabel, "Config: invalid port", COLOR_DANGER);
+            }
+            appendSystemControlLog(ts() + " | Config save failed: invalid port (" + portText + ").");
+            return;
+        }
+
+        SystemControlConfig.ConfigValues values = SystemControlConfig.sanitize(
+                new SystemControlConfig.ConfigValues(host, port, aiPath, opsPath)
+        );
+        try {
+            SystemControlConfig.save(values);
+            applyConfigToUi(values);
+            if (systemConfigStatusLabel != null) {
+                styleInlineStatus(systemConfigStatusLabel, "Config: saved", COLOR_SUCCESS);
+            }
+            appendSystemControlLog(ts() + " | Saved config to user home.");
+            checkConnection();
+            refreshSystemStatuses(false);
+        } catch (IOException ex) {
+            if (systemConfigStatusLabel != null) {
+                styleInlineStatus(systemConfigStatusLabel, "Config: save failed", COLOR_DANGER);
+            }
+            appendSystemControlLog(ts() + " | Config save failed: " + ex.getMessage());
+        }
+    }
+
+    private void applyConfigToUi(SystemControlConfig.ConfigValues config) {
+        SystemControlConfig.ConfigValues safe = SystemControlConfig.sanitize(config);
+        hostField.setText(safe.backendHost());
+        portField.setText(String.valueOf(safe.backendPort()));
+        if (systemConfigHostField != null) {
+            systemConfigHostField.setText(safe.backendHost());
+        }
+        if (systemConfigPortField != null) {
+            systemConfigPortField.setText(String.valueOf(safe.backendPort()));
+        }
+        if (systemConfigAiPathField != null) {
+            systemConfigAiPathField.setText(safe.aiRepoPath());
+        }
+        if (systemConfigOpsPathField != null) {
+            systemConfigOpsPathField.setText(safe.opsRepoPath());
+        }
+        if (backendPathField != null) {
+            backendPathField.setText(expandUserHome(safe.aiRepoPath()));
+        }
+        configureClientFromUI();
+    }
+
+    private String resolveConfiguredAiPath() {
+        String raw = systemConfigAiPathField == null
+                ? initialControlConfig.aiRepoPath()
+                : systemConfigAiPathField.getText().trim();
+        if (raw == null || raw.isBlank()) {
+            raw = initialControlConfig.aiRepoPath();
+        }
+        return expandUserHome(raw);
+    }
+
+    private String resolveConfiguredOpsPath() {
+        String raw = systemConfigOpsPathField == null
+                ? initialControlConfig.opsRepoPath()
+                : systemConfigOpsPathField.getText().trim();
+        if (raw == null || raw.isBlank()) {
+            raw = initialControlConfig.opsRepoPath();
+        }
+        return raw;
+    }
+
+    private void applySystemHostPortToHeader() {
+        if (systemConfigHostField != null && !systemConfigHostField.getText().trim().isEmpty()) {
+            hostField.setText(systemConfigHostField.getText().trim());
+        }
+        if (systemConfigPortField != null && !systemConfigPortField.getText().trim().isEmpty()) {
+            portField.setText(systemConfigPortField.getText().trim());
+        }
+        configureClientFromUI();
+    }
+
+    private void runBackendControlAction(String action, boolean fromBanner) {
+        if (systemControlActionInFlight) {
+            return;
+        }
+        applySystemHostPortToHeader();
+        String normalizedAction = action == null ? "status" : action.trim().toLowerCase();
+        String actionLabel = switch (normalizedAction) {
+            case "start" -> "start";
+            case "stop" -> "stop";
+            case "restart" -> "restart";
+            case "reset" -> "reset/restart";
+            default -> "status";
+        };
+
+        setSystemControlBusy(true, "Backend " + actionLabel + " in progress...", COLOR_WARNING);
+        if (systemBackendActionLabel != null) {
+            styleInlineStatus(systemBackendActionLabel, "Backend action: " + actionLabel + "...", COLOR_WARNING);
+        }
+        appendSystemControlLog(ts() + " | Backend action requested: " + actionLabel);
+
+        SwingWorker<Map<String, Object>, Void> worker = new SwingWorker<>() {
+            @Override
+            protected Map<String, Object> doInBackground() throws Exception {
+                Map<String, Object> response;
+                switch (normalizedAction) {
+                    case "start" -> response = apiClient.startBackendControl();
+                    case "stop" -> response = apiClient.stopBackendControl();
+                    case "restart" -> response = apiClient.restartBackendControl(false);
+                    case "reset" -> {
+                        try {
+                            response = apiClient.restartBackendControl(true);
+                        } catch (Exception cleanError) {
+                            Map<String, Object> fallback = new LinkedHashMap<>();
+                            fallback.put("clean_restart_error", cleanError.getMessage());
+                            fallback.put("stop", apiClient.stopBackendControl());
+                            fallback.put("start", apiClient.startBackendControl());
+                            response = fallback;
+                        }
+                    }
+                    default -> response = apiClient.fetchBackendControlStatus();
+                }
+                try {
+                    response.put("status_after", apiClient.fetchBackendControlStatus());
+                } catch (Exception statusError) {
+                    response.put("status_error", statusError.getMessage());
+                }
+                return response;
+            }
+
+            @Override
+            protected void done() {
+                try {
+                    Map<String, Object> response = get();
+                    appendSystemControlLog(ts() + " | Backend " + actionLabel + " completed.");
+                    appendSystemControlLog(Json.pretty(response));
+                    Object statusAfter = response.get("status_after");
+                    Map<String, Object> statusPayload = statusAfter instanceof Map<?, ?> mapRaw
+                            ? Json.asObject(mapRaw)
+                            : response;
+                    renderBackendControlStatus(statusPayload, "");
+                    String errorDetail = stringOrEmpty(findAnyValue(response, "error_detail", "error", "detail", "status_error"));
+                    boolean hasError = !errorDetail.isBlank();
+                    if (("start".equals(normalizedAction)
+                            || "restart".equals(normalizedAction)
+                            || "reset".equals(normalizedAction))
+                            && !hasError) {
+                        lastBackendRestart = ts();
+                    }
+                    if (systemBackendActionLabel != null) {
+                        styleInlineStatus(
+                                systemBackendActionLabel,
+                                "Backend action: " + actionLabel + (hasError ? " warning" : " done"),
+                                hasError ? COLOR_WARNING : COLOR_SUCCESS
+                        );
+                    }
+                    setSystemControlBusy(false, "Backend " + actionLabel + (hasError ? " completed with warnings" : " completed"),
+                            hasError ? COLOR_WARNING : COLOR_SUCCESS);
+                    checkConnection();
+                    if (fromBanner) {
+                        refreshSystemStatuses(true);
+                    }
+                } catch (Exception ex) {
+                    String message = humanizeError(ex);
+                    appendSystemControlLog(ts() + " | Backend " + actionLabel + " failed: " + message);
+                    renderBackendControlStatus(lastBackendControlStatus, message);
+                    if (systemBackendActionLabel != null) {
+                        styleInlineStatus(systemBackendActionLabel, "Backend action: failed", COLOR_DANGER);
+                    }
+                    setSystemControlBusy(false, "Backend " + actionLabel + " failed", COLOR_DANGER);
+                    checkConnection();
+                }
+            }
+        };
+        worker.execute();
+    }
+
+    private void runOrchestratorControlAction(String action) {
+        if (systemControlActionInFlight) {
+            return;
+        }
+        String normalizedAction = action == null ? "status" : action.trim().toLowerCase();
+        String opsPath = resolveConfiguredOpsPath();
+        setSystemControlBusy(true, "Orchestrator " + normalizedAction + " in progress...", COLOR_WARNING);
+        if (systemOpsActionLabel != null) {
+            styleInlineStatus(systemOpsActionLabel, "Orchestrator action: " + normalizedAction + "...", COLOR_WARNING);
+        }
+        appendSystemControlLog(ts() + " | Orchestrator action requested: " + normalizedAction + " (" + opsPath + ")");
+
+        SwingWorker<Map<String, Object>, Void> worker = new SwingWorker<>() {
+            @Override
+            protected Map<String, Object> doInBackground() throws Exception {
+                Map<String, Object> response = switch (normalizedAction) {
+                    case "start" -> apiClient.startOrchestrator(opsPath);
+                    case "stop" -> apiClient.stopOrchestrator(opsPath);
+                    case "restart" -> apiClient.restartOrchestrator(opsPath);
+                    default -> apiClient.fetchOrchestratorStatus(opsPath);
+                };
+                if (!"status".equals(normalizedAction)) {
+                    try {
+                        response.put("status_after", apiClient.fetchOrchestratorStatus(opsPath));
+                    } catch (Exception statusError) {
+                        response.put("status_error", statusError.getMessage());
+                    }
+                }
+                return response;
+            }
+
+            @Override
+            protected void done() {
+                try {
+                    Map<String, Object> response = get();
+                    appendSystemControlLog(ts() + " | Orchestrator " + normalizedAction + " completed.");
+                    appendSystemControlLog(Json.pretty(response));
+                    Object statusAfter = response.get("status_after");
+                    Map<String, Object> statusPayload = statusAfter instanceof Map<?, ?> mapRaw
+                            ? Json.asObject(mapRaw)
+                            : response;
+                    renderOrchestratorStatus(statusPayload, stringOrEmpty(response.get("status_error")));
+
+                    String errorDetail = stringOrEmpty(findAnyValue(response, "error_detail", "error", "detail", "stderr"));
+                    boolean hasError = !errorDetail.isBlank() && !"status".equals(normalizedAction);
+                    if (systemOpsActionLabel != null) {
+                        styleInlineStatus(
+                                systemOpsActionLabel,
+                                "Orchestrator action: " + normalizedAction + (hasError ? " warning" : " done"),
+                                hasError ? COLOR_WARNING : COLOR_SUCCESS
+                        );
+                    }
+                    setSystemControlBusy(false,
+                            "Orchestrator " + normalizedAction + (hasError ? " completed with warnings" : " completed"),
+                            hasError ? COLOR_WARNING : COLOR_SUCCESS);
+                } catch (Exception ex) {
+                    String message = humanizeError(ex);
+                    appendSystemControlLog(ts() + " | Orchestrator " + normalizedAction + " failed: " + message);
+                    renderOrchestratorStatus(lastOpsControlStatus, message);
+                    if (systemOpsActionLabel != null) {
+                        styleInlineStatus(systemOpsActionLabel, "Orchestrator action: failed", COLOR_DANGER);
+                    }
+                    setSystemControlBusy(false, "Orchestrator " + normalizedAction + " failed", COLOR_DANGER);
+                }
+            }
+        };
+        worker.execute();
+    }
+
+    private void setSystemControlBusy(boolean busy, String message, Color color) {
+        systemControlActionInFlight = busy;
+        setSystemControlButtonsEnabled(!busy);
+        if (systemControlProgressLabel != null) {
+            styleInlineStatus(systemControlProgressLabel, message, color);
+        }
+        if (startupBannerStartButton != null && startupBannerPanel != null && startupBannerPanel.isVisible()) {
+            startupBannerStartButton.setEnabled(!busy);
+        }
+    }
+
+    private void setSystemControlButtonsEnabled(boolean enabled) {
+        if (systemBackendStartButton != null) {
+            systemBackendStartButton.setEnabled(enabled);
+        }
+        if (systemBackendStopButton != null) {
+            systemBackendStopButton.setEnabled(enabled);
+        }
+        if (systemBackendRestartButton != null) {
+            systemBackendRestartButton.setEnabled(enabled);
+        }
+        if (systemBackendStatusButton != null) {
+            systemBackendStatusButton.setEnabled(enabled);
+        }
+        if (systemBackendResetButton != null) {
+            systemBackendResetButton.setEnabled(enabled);
+        }
+        if (systemOpsStartButton != null) {
+            systemOpsStartButton.setEnabled(enabled);
+        }
+        if (systemOpsStopButton != null) {
+            systemOpsStopButton.setEnabled(enabled);
+        }
+        if (systemOpsRestartButton != null) {
+            systemOpsRestartButton.setEnabled(enabled);
+        }
+        if (systemOpsStatusButton != null) {
+            systemOpsStatusButton.setEnabled(enabled);
+        }
+        if (systemConfigSaveButton != null) {
+            systemConfigSaveButton.setEnabled(enabled);
+        }
+        if (systemConfigReloadButton != null) {
+            systemConfigReloadButton.setEnabled(enabled);
+        }
+    }
+
+    private void refreshSystemStatuses(boolean manual) {
+        if (systemBackendStatusArea == null || systemOpsStatusArea == null || systemControlActionInFlight) {
+            return;
+        }
+        applySystemHostPortToHeader();
+        if (manual && systemControlProgressLabel != null) {
+            styleInlineStatus(systemControlProgressLabel, "Refreshing statuses...", COLOR_WARNING);
+        }
+
+        String opsPath = resolveConfiguredOpsPath();
+        SwingWorker<Map<String, Object>, Void> worker = new SwingWorker<>() {
+            @Override
+            protected Map<String, Object> doInBackground() {
+                Map<String, Object> payload = new LinkedHashMap<>();
+                try {
+                    payload.put("backend", apiClient.fetchBackendControlStatus());
+                } catch (Exception backendError) {
+                    payload.put("backend_error", humanizeError(backendError));
+                }
+                try {
+                    payload.put("ops", apiClient.fetchOrchestratorStatus(opsPath));
+                } catch (Exception opsError) {
+                    payload.put("ops_error", humanizeError(opsError));
+                }
+                return payload;
+            }
+
+            @Override
+            protected void done() {
+                try {
+                    Map<String, Object> payload = get();
+                    Object backend = payload.get("backend");
+                    if (backend instanceof Map<?, ?> mapRaw) {
+                        renderBackendControlStatus(Json.asObject(mapRaw), "");
+                    } else {
+                        renderBackendControlStatus(lastBackendControlStatus, stringOrEmpty(payload.get("backend_error")));
+                    }
+
+                    Object ops = payload.get("ops");
+                    if (ops instanceof Map<?, ?> mapRaw) {
+                        renderOrchestratorStatus(Json.asObject(mapRaw), "");
+                    } else {
+                        renderOrchestratorStatus(lastOpsControlStatus, stringOrEmpty(payload.get("ops_error")));
+                    }
+                    if (manual && systemControlProgressLabel != null) {
+                        styleInlineStatus(systemControlProgressLabel, "Status refreshed " + ts(), COLOR_SUCCESS);
+                    }
+                } catch (Exception ex) {
+                    if (manual && systemControlProgressLabel != null) {
+                        styleInlineStatus(systemControlProgressLabel, "Status refresh failed", COLOR_DANGER);
+                    }
+                    appendSystemControlLog(ts() + " | Status refresh failed: " + humanizeError(ex));
+                }
+            }
+        };
+        worker.execute();
+    }
+
+    private void renderBackendControlStatus(Map<String, Object> status, String fallbackError) {
+        Map<String, Object> payload = status == null ? new LinkedHashMap<>() : new LinkedHashMap<>(status);
+        if (!payload.isEmpty()) {
+            lastBackendControlStatus = payload;
+        }
+
+        String runningRaw = firstNonBlank(
+                stringOrEmpty(findAnyValue(payload, "running", "is_running", "alive", "status")),
+                "unknown"
+        );
+        String running = normalizeRunningValue(runningRaw);
+        String pid = firstNonBlank(stringOrEmpty(findAnyValue(payload, "pid", "process_id", "processId")), "—");
+        String pythonExecutable = firstNonBlank(
+                stringOrEmpty(findAnyValue(payload, "python_executable", "python", "python_path", "executable")),
+                "—"
+        );
+        String port = firstNonBlank(
+                stringOrEmpty(findAnyValue(payload, "port", "backend_port")),
+                String.valueOf(currentPort())
+        );
+        String lastHealth = firstNonBlank(
+                stringOrEmpty(findAnyValue(payload, "last_health", "health", "lastHealth")),
+                lastBackendHealth
+        );
+        String lastRestart = firstNonBlank(
+                stringOrEmpty(findAnyValue(payload, "last_restart", "restarted_at", "lastRestart")),
+                this.lastBackendRestart
+        );
+        String errorDetail = firstNonBlank(
+                stringOrEmpty(findAnyValue(payload, "error_detail", "error", "detail", "stderr")),
+                fallbackError == null ? "" : fallbackError
+        );
+
+        StringBuilder sb = new StringBuilder();
+        sb.append("running?: ").append(running).append("\n");
+        sb.append("pid: ").append(pid).append("\n");
+        sb.append("python_executable: ").append(pythonExecutable).append("\n");
+        sb.append("port: ").append(port).append("\n");
+        sb.append("last_health: ").append(firstNonBlank(lastHealth, "—")).append("\n");
+        sb.append("last_restart: ").append(firstNonBlank(lastRestart, "—")).append("\n");
+        sb.append("error detail: ").append(errorDetail.isBlank() ? "—" : errorDetail);
+        if (systemBackendStatusArea != null) {
+            systemBackendStatusArea.setText(sb.toString());
+            systemBackendStatusArea.setCaretPosition(0);
+        }
+    }
+
+    private void renderOrchestratorStatus(Map<String, Object> status, String fallbackError) {
+        Map<String, Object> payload = status == null ? new LinkedHashMap<>() : new LinkedHashMap<>(status);
+        if (!payload.isEmpty()) {
+            lastOpsControlStatus = payload;
+        }
+
+        String runningRaw = firstNonBlank(
+                stringOrEmpty(findAnyValue(payload, "running", "is_running", "alive", "status")),
+                "unknown"
+        );
+        String running = normalizeRunningValue(runningRaw);
+        String pid = firstNonBlank(stringOrEmpty(findAnyValue(payload, "pid", "process_id", "processId")), "—");
+        String heartbeat = firstNonBlank(
+                stringOrEmpty(findAnyValue(payload, "last_heartbeat", "heartbeat", "lastHeartbeat")),
+                "—"
+        );
+        String lastScanRun = firstNonBlank(
+                stringOrEmpty(findAnyValue(payload, "last_scan_run", "lastScanRun", "scan_run")),
+                "—"
+        );
+        String errorDetail = firstNonBlank(
+                stringOrEmpty(findAnyValue(payload, "error_detail", "error", "detail", "stderr")),
+                fallbackError == null ? "" : fallbackError
+        );
+
+        StringBuilder sb = new StringBuilder();
+        sb.append("running?: ").append(running).append("\n");
+        sb.append("pid: ").append(pid).append("\n");
+        sb.append("last_heartbeat: ").append(heartbeat).append("\n");
+        sb.append("last_scan_run: ").append(lastScanRun).append("\n");
+        sb.append("error detail: ").append(errorDetail.isBlank() ? "—" : errorDetail);
+        if (systemOpsStatusArea != null) {
+            systemOpsStatusArea.setText(sb.toString());
+            systemOpsStatusArea.setCaretPosition(0);
+        }
+    }
+
+    private String normalizeRunningValue(String raw) {
+        if (raw == null || raw.isBlank()) {
+            return "unknown";
+        }
+        String lowered = raw.trim().toLowerCase();
+        if ("true".equals(lowered) || "running".equals(lowered) || "up".equals(lowered) || "active".equals(lowered)) {
+            return "yes";
+        }
+        if ("false".equals(lowered) || "stopped".equals(lowered) || "down".equals(lowered)
+                || "inactive".equals(lowered) || "not running".equals(lowered)) {
+            return "no";
+        }
+        return raw;
+    }
+
+    private void copySystemDiagnostics() {
+        StringBuilder sb = new StringBuilder();
+        sb.append("dPolaris System Diagnostics\n");
+        sb.append("generated_at=").append(ts()).append("\n");
+        sb.append("backend_target=").append(currentHostPort()).append("\n");
+        sb.append("backend_health=").append(lastBackendHealth).append("\n");
+        sb.append("last_backend_restart=").append(lastBackendRestart).append("\n");
+        sb.append("ai_repo=").append(resolveConfiguredAiPath()).append("\n");
+        sb.append("ops_repo=").append(expandUserHome(resolveConfiguredOpsPath())).append("\n\n");
+
+        sb.append("[Backend Status]\n");
+        sb.append(systemBackendStatusArea == null ? "n/a" : systemBackendStatusArea.getText()).append("\n\n");
+        sb.append("[Orchestrator Status]\n");
+        sb.append(systemOpsStatusArea == null ? "n/a" : systemOpsStatusArea.getText()).append("\n\n");
+        sb.append("[Backend Raw JSON]\n").append(Json.pretty(lastBackendControlStatus)).append("\n\n");
+        sb.append("[Orchestrator Raw JSON]\n").append(Json.pretty(lastOpsControlStatus)).append("\n\n");
+        sb.append("[Recent Activity]\n");
+        sb.append(systemControlLogArea == null ? "n/a" : limitLines(systemControlLogArea.getText(), 120));
+
+        String text = sb.toString();
+        Toolkit.getDefaultToolkit().getSystemClipboard().setContents(new StringSelection(text), null);
+        appendSystemControlLog(ts() + " | Diagnostics copied to clipboard.");
+        if (systemControlProgressLabel != null) {
+            styleInlineStatus(systemControlProgressLabel, "Diagnostics copied", COLOR_SUCCESS);
+        }
+    }
+
+    private void appendSystemControlLog(String line) {
+        if (systemControlLogArea == null) {
+            return;
+        }
+        SwingUtilities.invokeLater(() -> {
+            systemControlLogArea.append(line + "\n");
+            systemControlLogArea.setCaretPosition(systemControlLogArea.getDocument().getLength());
+        });
+    }
+
     private String defaultBackendPath() {
+        String configured = resolveConfiguredAiPath();
+        if (configured != null && !configured.isBlank() && new File(configured).isDirectory()) {
+            return configured;
+        }
+
         String envPath = System.getenv("DPOLARIS_AI_PATH");
         if (envPath != null && !envPath.isBlank()) {
             String expanded = expandUserHome(envPath.trim());

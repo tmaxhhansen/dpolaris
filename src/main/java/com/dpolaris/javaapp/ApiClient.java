@@ -1,6 +1,10 @@
 package com.dpolaris.javaapp;
 
+import java.io.BufferedReader;
+import java.io.File;
 import java.io.IOException;
+import java.io.InputStream;
+import java.io.InputStreamReader;
 import java.net.URI;
 import java.net.URLEncoder;
 import java.net.http.HttpClient;
@@ -12,8 +16,14 @@ import java.util.ArrayList;
 import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
+import java.util.concurrent.TimeUnit;
+import java.util.regex.Matcher;
+import java.util.regex.Pattern;
 
 final class ApiClient {
+    private static final Pattern PID_PATTERN = Pattern.compile("(?i)\\bpid\\s*[:=]\\s*(\\d+)\\b");
+    private static final Pattern HEARTBEAT_PATTERN = Pattern.compile("(?i)\\blast[_\\s-]?heartbeat\\s*[:=]\\s*([^\\n\\r]+)");
+    private static final Pattern LAST_SCAN_PATTERN = Pattern.compile("(?i)\\blast[_\\s-]?scan[_\\s-]?run\\s*[:=]\\s*([^\\n\\r]+)");
     private final HttpClient client;
     private String host;
     private int port;
@@ -246,6 +256,73 @@ final class ApiClient {
         return Json.asObject(response);
     }
 
+    Map<String, Object> startBackendControl() throws IOException, InterruptedException {
+        Object response = request("POST", "/api/control/backend/start", "{}", 45);
+        return Json.asObject(response);
+    }
+
+    Map<String, Object> stopBackendControl() throws IOException, InterruptedException {
+        Object response = request("POST", "/api/control/backend/stop", "{}", 45);
+        return Json.asObject(response);
+    }
+
+    Map<String, Object> restartBackendControl(boolean clean) throws IOException, InterruptedException {
+        String body = clean ? "{\"clean\":true}" : "{}";
+        Object response = request("POST", "/api/control/backend/restart", body, 60);
+        return Json.asObject(response);
+    }
+
+    Map<String, Object> fetchBackendControlStatus() throws IOException, InterruptedException {
+        Object response = request("GET", "/api/control/backend/status", null, 30);
+        return Json.asObject(response);
+    }
+
+    Map<String, Object> startOrchestrator(String opsRepoPath) throws IOException, InterruptedException {
+        return runOpsCommand(opsRepoPath, "up", 90);
+    }
+
+    Map<String, Object> stopOrchestrator(String opsRepoPath) throws IOException, InterruptedException {
+        return runOpsCommand(opsRepoPath, "down", 90);
+    }
+
+    Map<String, Object> restartOrchestrator(String opsRepoPath) throws IOException, InterruptedException {
+        Map<String, Object> stop = runOpsCommand(opsRepoPath, "down", 90);
+        Map<String, Object> start = runOpsCommand(opsRepoPath, "up", 90);
+
+        Map<String, Object> merged = new LinkedHashMap<>();
+        merged.put("action", "restart");
+        merged.put("stop", stop);
+        merged.put("start", start);
+        merged.put("running", start.get("running"));
+        merged.put("pid", start.get("pid"));
+        merged.put("last_heartbeat", firstNonBlank(
+                asString(start.get("last_heartbeat")),
+                asString(stop.get("last_heartbeat"))
+        ));
+        merged.put("last_scan_run", firstNonBlank(
+                asString(start.get("last_scan_run")),
+                asString(stop.get("last_scan_run"))
+        ));
+        merged.put("stderr", joinNonBlank(
+                asString(stop.get("stderr")),
+                asString(start.get("stderr"))
+        ));
+        merged.put("stdout", joinNonBlank(
+                asString(stop.get("stdout")),
+                asString(start.get("stdout"))
+        ));
+        merged.put("exit_code", Json.asInt(start.get("exit_code"), 0));
+        merged.put("error_detail", firstNonBlank(
+                asString(start.get("error_detail")),
+                asString(stop.get("error_detail"))
+        ));
+        return merged;
+    }
+
+    Map<String, Object> fetchOrchestratorStatus(String opsRepoPath) throws IOException, InterruptedException {
+        return runOpsCommand(opsRepoPath, "status", 60);
+    }
+
     Map<String, Object> runSchedulerJob(String jobId) throws IOException, InterruptedException {
         Object response = requestWithFallback(
                 "POST",
@@ -364,5 +441,296 @@ final class ApiClient {
 
     private static String encode(String value) {
         return URLEncoder.encode(value, StandardCharsets.UTF_8);
+    }
+
+    private Map<String, Object> runOpsCommand(String opsRepoPath, String action, int timeoutSeconds)
+            throws IOException, InterruptedException {
+        String expandedRepoPath = expandUserHome(firstNonBlank(opsRepoPath, "~/my-git/dPolaris_ops"));
+        File repoDir = new File(expandedRepoPath);
+        String python = isWindows()
+                ? expandedRepoPath + File.separator + ".venv" + File.separator + "Scripts" + File.separator + "python.exe"
+                : expandedRepoPath + File.separator + ".venv" + File.separator + "bin" + File.separator + "python";
+        List<String> command = List.of(python, "-m", "ops.main", action);
+
+        ProcessOutput output = executeLocalCommand(command, repoDir, timeoutSeconds);
+        String stdout = output.stdout() == null ? "" : output.stdout().trim();
+        String stderr = output.stderr() == null ? "" : output.stderr().trim();
+
+        Map<String, Object> result = new LinkedHashMap<>();
+        result.put("action", action);
+        result.put("command", String.join(" ", command));
+        result.put("cwd", expandedRepoPath);
+        result.put("exit_code", output.exitCode());
+        result.put("stdout", stdout);
+        result.put("stderr", stderr);
+
+        Object parsed = parseJsonIfPossible(stdout);
+        if (parsed instanceof Map<?, ?> parsedMap) {
+            result.putAll(Json.asObject(parsedMap));
+        }
+
+        String mapHeartbeat = lookupMapString(result, "last_heartbeat", "heartbeat", "lastHeartbeat");
+        String mapLastScan = lookupMapString(result, "last_scan_run", "lastScanRun", "scan_run");
+        String mapError = lookupMapString(result, "error_detail", "error", "detail", "stderr");
+
+        if (!mapHeartbeat.isBlank()) {
+            result.put("last_heartbeat", mapHeartbeat);
+        } else {
+            result.put("last_heartbeat", extractFirst(HEARTBEAT_PATTERN, stdout));
+        }
+        if (!mapLastScan.isBlank()) {
+            result.put("last_scan_run", mapLastScan);
+        } else {
+            result.put("last_scan_run", extractFirst(LAST_SCAN_PATTERN, stdout));
+        }
+
+        long pid = resolvePid(result, stdout);
+        if (pid > 0) {
+            result.put("pid", pid);
+        }
+
+        String runningValue = lookupMapString(result, "running", "is_running", "alive", "status");
+        Boolean running = resolveRunning(action, runningValue, stdout, stderr, output.exitCode());
+        result.put("running", running == null ? "unknown" : running);
+
+        if (output.timedOut()) {
+            result.put("error_detail", "Command timed out after " + timeoutSeconds + "s");
+        } else if (output.exitCode() != 0) {
+            result.put("error_detail", firstNonBlank(stderr, stdout, mapError,
+                    "ops.main " + action + " failed (exit=" + output.exitCode() + ")"));
+        } else if (!mapError.isBlank()) {
+            result.put("error_detail", mapError);
+        } else if (!stderr.isBlank()) {
+            result.put("error_detail", stderr);
+        } else {
+            result.put("error_detail", "");
+        }
+
+        return result;
+    }
+
+    private ProcessOutput executeLocalCommand(List<String> command, File workingDirectory, int timeoutSeconds)
+            throws IOException, InterruptedException {
+        if (!workingDirectory.isDirectory()) {
+            throw new IOException("Ops repo path does not exist: " + workingDirectory.getAbsolutePath());
+        }
+
+        ProcessBuilder builder = new ProcessBuilder(command);
+        builder.directory(workingDirectory);
+        Process process = builder.start();
+
+        StringBuilder stdoutBuffer = new StringBuilder();
+        StringBuilder stderrBuffer = new StringBuilder();
+        Thread stdoutThread = startStreamPump(process.getInputStream(), stdoutBuffer, "ops-stdout");
+        Thread stderrThread = startStreamPump(process.getErrorStream(), stderrBuffer, "ops-stderr");
+
+        boolean finished = process.waitFor(Math.max(1, timeoutSeconds), TimeUnit.SECONDS);
+        if (!finished) {
+            process.destroyForcibly();
+            process.waitFor(3, TimeUnit.SECONDS);
+        }
+
+        joinQuietly(stdoutThread);
+        joinQuietly(stderrThread);
+
+        int exitCode = finished ? process.exitValue() : -1;
+        return new ProcessOutput(exitCode, stdoutBuffer.toString(), stderrBuffer.toString(), !finished);
+    }
+
+    private Thread startStreamPump(InputStream stream, StringBuilder buffer, String name) {
+        Thread thread = new Thread(() -> {
+            try (BufferedReader reader = new BufferedReader(new InputStreamReader(stream, StandardCharsets.UTF_8))) {
+                String line;
+                boolean firstLine = true;
+                while ((line = reader.readLine()) != null) {
+                    if (!firstLine) {
+                        buffer.append('\n');
+                    }
+                    buffer.append(line);
+                    firstLine = false;
+                }
+            } catch (IOException ignored) {
+                // Best-effort stream capture.
+            }
+        }, name);
+        thread.setDaemon(true);
+        thread.start();
+        return thread;
+    }
+
+    private void joinQuietly(Thread thread) {
+        if (thread == null) {
+            return;
+        }
+        try {
+            thread.join(1200);
+        } catch (InterruptedException interrupted) {
+            Thread.currentThread().interrupt();
+        }
+    }
+
+    private long resolvePid(Map<String, Object> map, String stdout) {
+        String mapPid = lookupMapString(map, "pid", "process_id", "processId");
+        if (!mapPid.isBlank()) {
+            try {
+                return Long.parseLong(mapPid.trim());
+            } catch (NumberFormatException ignored) {
+                // Fall back to text extraction.
+            }
+        }
+        Matcher matcher = PID_PATTERN.matcher(stdout == null ? "" : stdout);
+        if (matcher.find()) {
+            try {
+                return Long.parseLong(matcher.group(1));
+            } catch (NumberFormatException ignored) {
+                return -1L;
+            }
+        }
+        return -1L;
+    }
+
+    private Boolean resolveRunning(
+            String action,
+            String mapValue,
+            String stdout,
+            String stderr,
+            int exitCode
+    ) {
+        String mapLower = asString(mapValue).toLowerCase();
+        if (mapLower.equals("true") || mapLower.equals("running") || mapLower.equals("up") || mapLower.equals("active")) {
+            return true;
+        }
+        if (mapLower.equals("false") || mapLower.equals("stopped") || mapLower.equals("down")
+                || mapLower.equals("inactive") || mapLower.equals("not running")) {
+            return false;
+        }
+
+        String text = (firstNonBlank(stdout, "") + "\n" + firstNonBlank(stderr, "")).toLowerCase();
+        if (text.contains("not running") || text.contains("stopped") || text.contains("inactive")
+                || text.contains("down")) {
+            return false;
+        }
+        if (text.contains("running") || text.contains("active") || text.contains("up")) {
+            return true;
+        }
+
+        if ("up".equals(action) && exitCode == 0) {
+            return true;
+        }
+        if ("down".equals(action) && exitCode == 0) {
+            return false;
+        }
+        return null;
+    }
+
+    private Object parseJsonIfPossible(String text) {
+        if (text == null || text.isBlank()) {
+            return null;
+        }
+        try {
+            return Json.parse(text);
+        } catch (RuntimeException ignored) {
+            return null;
+        }
+    }
+
+    private static String lookupMapString(Map<String, Object> map, String... keys) {
+        if (map == null || map.isEmpty() || keys == null) {
+            return "";
+        }
+        for (String key : keys) {
+            if (key == null) {
+                continue;
+            }
+            if (map.containsKey(key)) {
+                return asString(map.get(key));
+            }
+        }
+        for (Map.Entry<String, Object> entry : map.entrySet()) {
+            String normalizedEntryKey = normalizeKey(entry.getKey());
+            for (String key : keys) {
+                if (normalizedEntryKey.equals(normalizeKey(key))) {
+                    return asString(entry.getValue());
+                }
+            }
+        }
+        return "";
+    }
+
+    private static String normalizeKey(String key) {
+        if (key == null) {
+            return "";
+        }
+        StringBuilder sb = new StringBuilder(key.length());
+        for (int i = 0; i < key.length(); i++) {
+            char c = key.charAt(i);
+            if (Character.isLetterOrDigit(c)) {
+                sb.append(Character.toLowerCase(c));
+            }
+        }
+        return sb.toString();
+    }
+
+    private static String asString(Object value) {
+        if (value == null) {
+            return "";
+        }
+        return String.valueOf(value).trim();
+    }
+
+    private static String firstNonBlank(String... values) {
+        if (values == null) {
+            return "";
+        }
+        for (String value : values) {
+            if (value != null && !value.isBlank()) {
+                return value;
+            }
+        }
+        return "";
+    }
+
+    private static String joinNonBlank(String first, String second) {
+        String a = first == null ? "" : first.trim();
+        String b = second == null ? "" : second.trim();
+        if (a.isEmpty()) {
+            return b;
+        }
+        if (b.isEmpty()) {
+            return a;
+        }
+        return a + "\n" + b;
+    }
+
+    private static String expandUserHome(String path) {
+        if (path == null || path.isBlank()) {
+            return "";
+        }
+        String trimmed = path.trim();
+        if (trimmed.equals("~")) {
+            return System.getProperty("user.home");
+        }
+        if (trimmed.startsWith("~/") || trimmed.startsWith("~\\")) {
+            return System.getProperty("user.home") + trimmed.substring(1);
+        }
+        return trimmed;
+    }
+
+    private static boolean isWindows() {
+        return System.getProperty("os.name").toLowerCase().contains("win");
+    }
+
+    private static String extractFirst(Pattern pattern, String text) {
+        if (pattern == null || text == null || text.isBlank()) {
+            return "";
+        }
+        Matcher matcher = pattern.matcher(text);
+        if (matcher.find()) {
+            return matcher.group(1).trim();
+        }
+        return "";
+    }
+
+    private record ProcessOutput(int exitCode, String stdout, String stderr, boolean timedOut) {
     }
 }
