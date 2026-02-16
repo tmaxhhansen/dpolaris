@@ -1643,6 +1643,9 @@ public final class DPolarisJavaApp {
                         }
                         dlResultsArea.setCaretPosition(dlResultsArea.getDocument().getLength());
                     }
+                    if (analysisWorkspacePanel != null) {
+                        analysisWorkspacePanel.refresh(true);
+                    }
                     styleInlineStatus(universeStatusLabel, "Deep learning completed for " + selectedTickers.size() + " tickers", COLOR_SUCCESS);
                 } catch (Exception ex) {
                     String error = humanizeError(ex);
