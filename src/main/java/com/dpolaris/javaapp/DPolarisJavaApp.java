@@ -59,6 +59,7 @@ import javax.swing.JList;
 import javax.swing.JLabel;
 import javax.swing.JOptionPane;
 import javax.swing.JPanel;
+import javax.swing.JPasswordField;
 import javax.swing.JProgressBar;
 import javax.swing.JScrollPane;
 import javax.swing.JSpinner;
@@ -111,6 +112,7 @@ public final class DPolarisJavaApp {
     private static final String VIEW_DASHBOARD = "DASHBOARD";
     private static final String VIEW_TRAINING_RUNS = "TRAINING_RUNS";
     private static final String VIEW_PREDICTION_INSPECTOR = "PREDICTION_INSPECTOR";
+    private static final String VIEW_SETTINGS = "SETTINGS";
     private static final Pattern RUN_ID_PATTERN = Pattern.compile(
             "\"?(?:run_id|runId|run-id)\"?\\s*[:=]\\s*\"?([A-Za-z0-9_.:-]+)\"?"
     );
@@ -131,6 +133,7 @@ public final class DPolarisJavaApp {
     private final ScanService scanService = new ScanService(apiClient);
     private final AuditLogStore auditLogStore = new AuditLogStore();
     private final SystemControlConfig.ConfigValues initialControlConfig;
+    private AppSettingsConfig.SettingsValues appSettings;
     private final Object trainingAuditLock = new Object();
     private final Font uiFont;
     private final Font titleFont;
@@ -219,9 +222,27 @@ public final class DPolarisJavaApp {
     private JButton navDashboardButton;
     private JButton navTrainingRunsButton;
     private JButton navPredictionInspectorButton;
+    private JButton navSettingsButton;
     private JPanel contentPanel;
     private CardLayout contentLayout;
     private AnalysisWorkspacePanel analysisWorkspacePanel;
+
+    private JTextField settingsBackendHostField;
+    private JTextField settingsBackendPortField;
+    private JComboBox<String> settingsLlmProviderCombo;
+    private JPasswordField settingsAnthropicKeyField;
+    private JPasswordField settingsOpenAiKeyField;
+    private JPasswordField settingsNewsApiKeyField;
+    private JPasswordField settingsSlackWebhookField;
+    private JTextField settingsAiRepoPathField;
+    private JTextField settingsOpsRepoPathField;
+    private JTextField settingsDataDirField;
+    private JButton settingsSaveButton;
+    private JButton settingsResetDefaultsButton;
+    private JButton settingsTestConnectionButton;
+    private JButton settingsCopyExportButton;
+    private JLabel settingsStatusLabel;
+    private JTextArea settingsLogArea;
 
     private JTextField inspectorTickerField;
     private JTextField inspectorTimestampField;
@@ -449,7 +470,9 @@ public final class DPolarisJavaApp {
         uiFont = resolveUiFont(Font.PLAIN, 13);
         titleFont = resolveUiFont(Font.BOLD, 22);
         monoFont = resolveMonoFont(13);
+        appSettings = AppSettingsConfig.load();
         initialControlConfig = SystemControlConfig.load();
+        apiClient.configure(appSettings.backendHost(), appSettings.backendPort());
 
         frame = new JFrame("dPolaris Java");
         frame.setDefaultCloseOperation(WindowConstants.EXIT_ON_CLOSE);
@@ -465,8 +488,8 @@ public final class DPolarisJavaApp {
                 new EmptyBorder(12, 14, 12, 14)
         ));
 
-        hostField = new JTextField(initialControlConfig.backendHost(), 14);
-        portField = new JTextField(String.valueOf(initialControlConfig.backendPort()), 6);
+        hostField = new JTextField(appSettings.backendHost(), 14);
+        portField = new JTextField(String.valueOf(appSettings.backendPort()), 6);
         checkConnectionButton = new JButton("Check Connection");
         connectionLabel = new JLabel("Unknown", JLabel.CENTER);
 
@@ -520,6 +543,7 @@ public final class DPolarisJavaApp {
         contentPanel.add(createDashboardPanel(), VIEW_DASHBOARD);
         contentPanel.add(createTrainingRunsPanel(), VIEW_TRAINING_RUNS);
         contentPanel.add(createPredictionInspectorPanel(), VIEW_PREDICTION_INSPECTOR);
+        contentPanel.add(createSettingsPanel(), VIEW_SETTINGS);
 
         centerWrap.add(sideMenu, BorderLayout.WEST);
         centerWrap.add(contentPanel, BorderLayout.CENTER);
@@ -532,6 +556,7 @@ public final class DPolarisJavaApp {
         navDashboardButton.addActionListener(e -> showView(VIEW_DASHBOARD));
         navTrainingRunsButton.addActionListener(e -> showView(VIEW_TRAINING_RUNS));
         navPredictionInspectorButton.addActionListener(e -> showView(VIEW_PREDICTION_INSPECTOR));
+        navSettingsButton.addActionListener(e -> showView(VIEW_SETTINGS));
         refreshDashboardButton.addActionListener(e -> refreshDashboard());
         inspectorFetchButton.addActionListener(e -> refreshPredictionInspector());
 
@@ -544,6 +569,7 @@ public final class DPolarisJavaApp {
             }
         });
 
+        applySettingsToRuntime(appSettings, true);
         showView(VIEW_AI_MANAGEMENT);
     }
 
@@ -600,6 +626,11 @@ public final class DPolarisJavaApp {
         buttonPanel.add(navPredictionInspectorButton, gbc);
 
         gbc.gridy++;
+        navSettingsButton = new JButton("Settings");
+        styleNavButton(navSettingsButton);
+        buttonPanel.add(navSettingsButton, gbc);
+
+        gbc.gridy++;
         gbc.weighty = 1.0;
         buttonPanel.add(new JPanel(), gbc);
 
@@ -619,6 +650,181 @@ public final class DPolarisJavaApp {
         wrap.setBackground(COLOR_BG);
         wrap.add(tabs, BorderLayout.CENTER);
         return wrap;
+    }
+
+    private JPanel createSettingsPanel() {
+        JPanel root = new JPanel(new BorderLayout(8, 8));
+        root.setBackground(COLOR_BG);
+        root.setBorder(new EmptyBorder(8, 0, 0, 0));
+
+        settingsBackendHostField = new JTextField(16);
+        settingsBackendPortField = new JTextField(8);
+        settingsLlmProviderCombo = new JComboBox<>(new String[]{"none", "anthropic", "openai"});
+        settingsAnthropicKeyField = new JPasswordField(26);
+        settingsOpenAiKeyField = new JPasswordField(26);
+        settingsNewsApiKeyField = new JPasswordField(26);
+        settingsSlackWebhookField = new JPasswordField(40);
+        settingsAiRepoPathField = new JTextField(36);
+        settingsOpsRepoPathField = new JTextField(36);
+        settingsDataDirField = new JTextField(36);
+        settingsSaveButton = new JButton("Save");
+        settingsResetDefaultsButton = new JButton("Reset to Defaults");
+        settingsTestConnectionButton = new JButton("Test Connection");
+        settingsCopyExportButton = new JButton("Copy Export Commands");
+        settingsStatusLabel = new JLabel();
+
+        styleInputField(settingsBackendHostField);
+        styleInputField(settingsBackendPortField);
+        styleCombo(settingsLlmProviderCombo);
+        styleInputField(settingsAnthropicKeyField);
+        styleInputField(settingsOpenAiKeyField);
+        styleInputField(settingsNewsApiKeyField);
+        styleInputField(settingsSlackWebhookField);
+        styleInputField(settingsAiRepoPathField);
+        styleInputField(settingsOpsRepoPathField);
+        styleInputField(settingsDataDirField);
+        styleButton(settingsSaveButton, true);
+        styleButton(settingsResetDefaultsButton, false);
+        styleButton(settingsTestConnectionButton, false);
+        styleButton(settingsCopyExportButton, false);
+        styleInlineStatus(settingsStatusLabel, "Stored locally in " + AppSettingsConfig.settingsPath(), COLOR_MUTED);
+
+        JCheckBox showAnthropic = new JCheckBox("Show");
+        JCheckBox showOpenAi = new JCheckBox("Show");
+        JCheckBox showNews = new JCheckBox("Show");
+        JCheckBox showSlack = new JCheckBox("Show");
+        configureSecretToggle(settingsAnthropicKeyField, showAnthropic);
+        configureSecretToggle(settingsOpenAiKeyField, showOpenAi);
+        configureSecretToggle(settingsNewsApiKeyField, showNews);
+        configureSecretToggle(settingsSlackWebhookField, showSlack);
+
+        JPanel backendCard = createCardPanel();
+        backendCard.add(createSectionHeader("Backend"), BorderLayout.NORTH);
+        JPanel backendForm = new JPanel(new GridBagLayout());
+        backendForm.setOpaque(false);
+        GridBagConstraints b = settingsConstraints();
+        addSettingsRow(backendForm, b, "Backend Host", settingsBackendHostField);
+        addSettingsRow(backendForm, b, "Backend Port", settingsBackendPortField);
+        addSettingsRow(backendForm, b, "LLM Provider", settingsLlmProviderCombo);
+        backendCard.add(backendForm, BorderLayout.CENTER);
+
+        JPanel keysCard = createCardPanel();
+        keysCard.add(createSectionHeader("API Keys / Tokens"), BorderLayout.NORTH);
+        JPanel keysForm = new JPanel(new GridBagLayout());
+        keysForm.setOpaque(false);
+        GridBagConstraints k = settingsConstraints();
+        addSettingsRow(keysForm, k, "Anthropic API Key", secretRow(settingsAnthropicKeyField, showAnthropic));
+        addSettingsRow(keysForm, k, "OpenAI API Key", secretRow(settingsOpenAiKeyField, showOpenAi));
+        addSettingsRow(keysForm, k, "News API Key", secretRow(settingsNewsApiKeyField, showNews));
+        JLabel localOnlyLabel = new JLabel("Stored locally only (masked in UI by default).");
+        localOnlyLabel.setForeground(COLOR_MUTED);
+        localOnlyLabel.setFont(uiFont.deriveFont(Font.PLAIN, 12f));
+        addSettingsRow(keysForm, k, "Note", localOnlyLabel);
+        keysCard.add(keysForm, BorderLayout.CENTER);
+
+        JPanel slackCard = createCardPanel();
+        slackCard.add(createSectionHeader("Slack"), BorderLayout.NORTH);
+        JPanel slackForm = new JPanel(new GridBagLayout());
+        slackForm.setOpaque(false);
+        GridBagConstraints s = settingsConstraints();
+        addSettingsRow(slackForm, s, "Slack Webhook URL", secretRow(settingsSlackWebhookField, showSlack));
+        slackCard.add(slackForm, BorderLayout.CENTER);
+
+        JPanel pathsCard = createCardPanel();
+        pathsCard.add(createSectionHeader("Paths"), BorderLayout.NORTH);
+        JPanel pathsForm = new JPanel(new GridBagLayout());
+        pathsForm.setOpaque(false);
+        GridBagConstraints p = settingsConstraints();
+        addSettingsRow(pathsForm, p, "dpolaris_ai Repo Path", settingsAiRepoPathField);
+        addSettingsRow(pathsForm, p, "dPolaris_ops Repo Path", settingsOpsRepoPathField);
+        addSettingsRow(pathsForm, p, "dpolaris_data Directory", settingsDataDirField);
+        pathsCard.add(pathsForm, BorderLayout.CENTER);
+
+        JPanel actionsCard = createCardPanel();
+        actionsCard.add(createSectionHeader("Actions"), BorderLayout.NORTH);
+        JPanel actions = new JPanel(new FlowLayout(FlowLayout.LEFT, 8, 0));
+        actions.setOpaque(false);
+        actions.add(settingsSaveButton);
+        actions.add(settingsResetDefaultsButton);
+        actions.add(settingsTestConnectionButton);
+        actions.add(settingsCopyExportButton);
+        actions.add(settingsStatusLabel);
+        actionsCard.add(actions, BorderLayout.CENTER);
+
+        JPanel formStack = new JPanel();
+        formStack.setOpaque(false);
+        formStack.setLayout(new BoxLayout(formStack, BoxLayout.Y_AXIS));
+        formStack.add(backendCard);
+        formStack.add(Box.createVerticalStrut(8));
+        formStack.add(keysCard);
+        formStack.add(Box.createVerticalStrut(8));
+        formStack.add(slackCard);
+        formStack.add(Box.createVerticalStrut(8));
+        formStack.add(pathsCard);
+        formStack.add(Box.createVerticalStrut(8));
+        formStack.add(actionsCard);
+        formStack.add(Box.createVerticalGlue());
+
+        JScrollPane formScroll = new JScrollPane(formStack);
+        formScroll.getViewport().setBackground(COLOR_BG);
+        formScroll.setBackground(COLOR_BG);
+        formScroll.setBorder(new LineBorder(COLOR_BORDER, 1, true));
+
+        settingsLogArea = createLogArea();
+        settingsLogArea.setRows(8);
+        JScrollPane logScroll = createLogScrollPane(settingsLogArea, "Settings Log");
+        logScroll.setPreferredSize(new Dimension(400, 190));
+
+        settingsSaveButton.addActionListener(e -> saveSettingsFromWorkspace());
+        settingsResetDefaultsButton.addActionListener(e -> resetSettingsToDefaults());
+        settingsTestConnectionButton.addActionListener(e -> testSettingsConnection());
+        settingsCopyExportButton.addActionListener(e -> copySettingsExportCommands());
+
+        root.add(formScroll, BorderLayout.CENTER);
+        root.add(logScroll, BorderLayout.SOUTH);
+        populateSettingsForm(appSettings);
+        return root;
+    }
+
+    private GridBagConstraints settingsConstraints() {
+        GridBagConstraints gbc = new GridBagConstraints();
+        gbc.gridx = 0;
+        gbc.gridy = 0;
+        gbc.insets = new Insets(4, 4, 4, 8);
+        gbc.anchor = GridBagConstraints.NORTHWEST;
+        return gbc;
+    }
+
+    private void addSettingsRow(JPanel panel, GridBagConstraints gbc, String labelText, JComponent field) {
+        JLabel label = createFormLabel(labelText);
+        GridBagConstraints left = (GridBagConstraints) gbc.clone();
+        left.gridx = 0;
+        left.weightx = 0.0;
+        left.fill = GridBagConstraints.NONE;
+        panel.add(label, left);
+
+        GridBagConstraints right = (GridBagConstraints) gbc.clone();
+        right.gridx = 1;
+        right.weightx = 1.0;
+        right.fill = GridBagConstraints.HORIZONTAL;
+        panel.add(field, right);
+
+        gbc.gridy++;
+    }
+
+    private JPanel secretRow(JComponent field, JCheckBox showToggle) {
+        JPanel row = new JPanel(new FlowLayout(FlowLayout.LEFT, 8, 0));
+        row.setOpaque(false);
+        row.add(field);
+        row.add(showToggle);
+        return row;
+    }
+
+    private void configureSecretToggle(JPasswordField field, JCheckBox toggle) {
+        toggle.setOpaque(false);
+        toggle.setForeground(COLOR_TEXT);
+        char echoChar = field.getEchoChar();
+        toggle.addActionListener(e -> field.setEchoChar(toggle.isSelected() ? (char) 0 : echoChar));
     }
 
     private JPanel createStartupBannerPanel() {
@@ -654,10 +860,10 @@ public final class DPolarisJavaApp {
 
         JPanel configCard = createCardPanel();
         configCard.add(createSectionHeader("Paths & Ports"), BorderLayout.NORTH);
-        systemConfigHostField = new JTextField(initialControlConfig.backendHost(), 14);
-        systemConfigPortField = new JTextField(String.valueOf(initialControlConfig.backendPort()), 6);
-        systemConfigAiPathField = new JTextField(initialControlConfig.aiRepoPath(), 40);
-        systemConfigOpsPathField = new JTextField(initialControlConfig.opsRepoPath(), 40);
+        systemConfigHostField = new JTextField(appSettings.backendHost(), 14);
+        systemConfigPortField = new JTextField(String.valueOf(appSettings.backendPort()), 6);
+        systemConfigAiPathField = new JTextField(appSettings.aiRepoPath(), 40);
+        systemConfigOpsPathField = new JTextField(appSettings.opsRepoPath(), 40);
         systemConfigSaveButton = new JButton("Save Config");
         systemConfigReloadButton = new JButton("Reload Saved");
         systemConfigStatusLabel = new JLabel();
@@ -795,7 +1001,7 @@ public final class DPolarisJavaApp {
         root.add(topStack, BorderLayout.NORTH);
         root.add(logs, BorderLayout.CENTER);
 
-        applyConfigToUi(initialControlConfig);
+        applyConfigToUi(toSystemControlConfig(appSettings));
         renderBackendControlStatus(new LinkedHashMap<>(), "No backend status loaded yet.");
         renderOrchestratorStatus(new LinkedHashMap<>(), "No orchestrator status loaded yet.");
 
@@ -8678,6 +8884,7 @@ public final class DPolarisJavaApp {
         styleNavButtonState(navDashboardButton, VIEW_DASHBOARD.equals(viewId));
         styleNavButtonState(navTrainingRunsButton, VIEW_TRAINING_RUNS.equals(viewId));
         styleNavButtonState(navPredictionInspectorButton, VIEW_PREDICTION_INSPECTOR.equals(viewId));
+        styleNavButtonState(navSettingsButton, VIEW_SETTINGS.equals(viewId));
         if (VIEW_DEEP_LEARNING.equals(viewId)) {
             ensureDeepLearningTickersLoaded(false);
         }
@@ -9374,6 +9581,333 @@ public final class DPolarisJavaApp {
         systemStatusTimer.start();
     }
 
+    private void populateSettingsForm(AppSettingsConfig.SettingsValues values) {
+        AppSettingsConfig.SettingsValues safe = AppSettingsConfig.sanitize(values);
+        if (settingsBackendHostField != null) {
+            settingsBackendHostField.setText(safe.backendHost());
+        }
+        if (settingsBackendPortField != null) {
+            settingsBackendPortField.setText(String.valueOf(safe.backendPort()));
+        }
+        if (settingsLlmProviderCombo != null) {
+            settingsLlmProviderCombo.setSelectedItem(safe.llmProvider());
+        }
+        if (settingsAnthropicKeyField != null) {
+            settingsAnthropicKeyField.setText(safe.anthropicApiKey());
+        }
+        if (settingsOpenAiKeyField != null) {
+            settingsOpenAiKeyField.setText(safe.openAiApiKey());
+        }
+        if (settingsNewsApiKeyField != null) {
+            settingsNewsApiKeyField.setText(safe.newsApiKey());
+        }
+        if (settingsSlackWebhookField != null) {
+            settingsSlackWebhookField.setText(safe.slackWebhookUrl());
+        }
+        if (settingsAiRepoPathField != null) {
+            settingsAiRepoPathField.setText(safe.aiRepoPath());
+        }
+        if (settingsOpsRepoPathField != null) {
+            settingsOpsRepoPathField.setText(safe.opsRepoPath());
+        }
+        if (settingsDataDirField != null) {
+            settingsDataDirField.setText(safe.dataDir());
+        }
+    }
+
+    private AppSettingsConfig.SettingsValues readSettingsFromForm() {
+        String host = settingsBackendHostField == null ? "" : settingsBackendHostField.getText().trim();
+        String portText = settingsBackendPortField == null ? "" : settingsBackendPortField.getText().trim();
+        int port;
+        try {
+            port = Integer.parseInt(portText);
+            if (port <= 0) {
+                throw new NumberFormatException("port must be positive");
+            }
+        } catch (NumberFormatException ex) {
+            throw new IllegalArgumentException("Backend port must be a positive integer.");
+        }
+
+        String llmProvider = settingsLlmProviderCombo == null || settingsLlmProviderCombo.getSelectedItem() == null
+                ? AppSettingsConfig.DEFAULT_LLM_PROVIDER
+                : String.valueOf(settingsLlmProviderCombo.getSelectedItem()).trim();
+
+        String anthropic = settingsAnthropicKeyField == null ? "" : new String(settingsAnthropicKeyField.getPassword()).trim();
+        String openAi = settingsOpenAiKeyField == null ? "" : new String(settingsOpenAiKeyField.getPassword()).trim();
+        String news = settingsNewsApiKeyField == null ? "" : new String(settingsNewsApiKeyField.getPassword()).trim();
+        String slack = settingsSlackWebhookField == null ? "" : new String(settingsSlackWebhookField.getPassword()).trim();
+        String aiPath = settingsAiRepoPathField == null ? "" : settingsAiRepoPathField.getText().trim();
+        String opsPath = settingsOpsRepoPathField == null ? "" : settingsOpsRepoPathField.getText().trim();
+        String dataDir = settingsDataDirField == null ? "" : settingsDataDirField.getText().trim();
+
+        return AppSettingsConfig.sanitize(new AppSettingsConfig.SettingsValues(
+                host,
+                port,
+                llmProvider,
+                anthropic,
+                openAi,
+                news,
+                slack,
+                aiPath,
+                opsPath,
+                dataDir
+        ));
+    }
+
+    private void saveSettingsFromWorkspace() {
+        AppSettingsConfig.SettingsValues values;
+        try {
+            values = readSettingsFromForm();
+        } catch (IllegalArgumentException ex) {
+            styleInlineStatus(settingsStatusLabel, "Settings: " + ex.getMessage(), COLOR_DANGER);
+            appendSettingsLog(ts() + " | Save failed: " + ex.getMessage());
+            return;
+        }
+
+        try {
+            AppSettingsConfig.save(values);
+            applySettingsToRuntime(values, true);
+            try {
+                SystemControlConfig.save(toSystemControlConfig(values));
+            } catch (Exception ignored) {
+                // Keep legacy sync best-effort only.
+            }
+            styleInlineStatus(settingsStatusLabel, "Settings: saved", COLOR_SUCCESS);
+            appendSettingsLog(ts() + " | Saved settings to " + AppSettingsConfig.settingsPath());
+            checkConnection();
+        } catch (IOException ex) {
+            styleInlineStatus(settingsStatusLabel, "Settings: save failed", COLOR_DANGER);
+            appendSettingsLog(ts() + " | Save failed: " + ex.getMessage());
+        }
+    }
+
+    private void resetSettingsToDefaults() {
+        int choice = JOptionPane.showConfirmDialog(
+                frame,
+                "Reset all settings to defaults and overwrite local settings.json?",
+                "Reset Settings",
+                JOptionPane.OK_CANCEL_OPTION,
+                JOptionPane.WARNING_MESSAGE
+        );
+        if (choice != JOptionPane.OK_OPTION) {
+            return;
+        }
+
+        AppSettingsConfig.SettingsValues defaults = AppSettingsConfig.defaults();
+        try {
+            AppSettingsConfig.save(defaults);
+            applySettingsToRuntime(defaults, true);
+            try {
+                SystemControlConfig.save(toSystemControlConfig(defaults));
+            } catch (Exception ignored) {
+                // Best-effort legacy sync.
+            }
+            styleInlineStatus(settingsStatusLabel, "Settings: reset to defaults", COLOR_SUCCESS);
+            appendSettingsLog(ts() + " | Reset settings to defaults.");
+            checkConnection();
+        } catch (IOException ex) {
+            styleInlineStatus(settingsStatusLabel, "Settings: reset failed", COLOR_DANGER);
+            appendSettingsLog(ts() + " | Reset failed: " + ex.getMessage());
+        }
+    }
+
+    private void testSettingsConnection() {
+        AppSettingsConfig.SettingsValues values;
+        try {
+            values = readSettingsFromForm();
+        } catch (IllegalArgumentException ex) {
+            styleInlineStatus(settingsStatusLabel, "Settings: " + ex.getMessage(), COLOR_DANGER);
+            appendSettingsLog(ts() + " | Test failed: " + ex.getMessage());
+            return;
+        }
+
+        if (settingsTestConnectionButton != null) {
+            settingsTestConnectionButton.setEnabled(false);
+        }
+        styleInlineStatus(settingsStatusLabel,
+                "Settings: testing " + values.backendHost() + ":" + values.backendPort() + "...",
+                COLOR_WARNING);
+        appendSettingsLog(ts() + " | Testing backend at " + values.backendHost() + ":" + values.backendPort());
+
+        SwingWorker<Map<String, Object>, Void> worker = new SwingWorker<>() {
+            @Override
+            protected Map<String, Object> doInBackground() {
+                Map<String, Object> result = new LinkedHashMap<>();
+                apiClient.configure(values.backendHost(), values.backendPort());
+                boolean healthy = apiClient.healthCheck(8);
+                result.put("healthy", healthy);
+                if (healthy) {
+                    try {
+                        Object status = apiClient.fetchStatus();
+                        result.put("status", status);
+                    } catch (Exception ex) {
+                        result.put("status_error", humanizeError(ex));
+                    }
+                }
+                return result;
+            }
+
+            @Override
+            protected void done() {
+                if (settingsTestConnectionButton != null) {
+                    settingsTestConnectionButton.setEnabled(true);
+                }
+                configureClientFromUI();
+                try {
+                    Map<String, Object> result = get();
+                    boolean healthy = Boolean.TRUE.equals(result.get("healthy"));
+                    if (!healthy) {
+                        styleInlineStatus(settingsStatusLabel, "Settings: FAIL /health", COLOR_DANGER);
+                        appendSettingsLog(ts() + " | FAIL /health");
+                        return;
+                    }
+                    Object statusErr = result.get("status_error");
+                    if (statusErr != null) {
+                        styleInlineStatus(settingsStatusLabel, "Settings: FAIL /api/status", COLOR_DANGER);
+                        appendSettingsLog(ts() + " | PASS /health");
+                        appendSettingsLog(ts() + " | FAIL /api/status: " + statusErr);
+                        return;
+                    }
+                    styleInlineStatus(settingsStatusLabel, "Settings: PASS /health + /api/status", COLOR_SUCCESS);
+                    appendSettingsLog(ts() + " | PASS /health");
+                    appendSettingsLog(ts() + " | PASS /api/status");
+                } catch (Exception ex) {
+                    styleInlineStatus(settingsStatusLabel, "Settings: connection test failed", COLOR_DANGER);
+                    appendSettingsLog(ts() + " | Connection test failed: " + humanizeError(ex));
+                }
+            }
+        };
+        worker.execute();
+    }
+
+    private void copySettingsExportCommands() {
+        AppSettingsConfig.SettingsValues values;
+        try {
+            values = readSettingsFromForm();
+        } catch (IllegalArgumentException ex) {
+            styleInlineStatus(settingsStatusLabel, "Settings: " + ex.getMessage(), COLOR_DANGER);
+            return;
+        }
+        String commands = buildSettingsExportCommands(values);
+        Toolkit.getDefaultToolkit().getSystemClipboard().setContents(new StringSelection(commands), null);
+        styleInlineStatus(settingsStatusLabel, "Settings: export commands copied", COLOR_SUCCESS);
+        appendSettingsLog(ts() + " | Copied export commands to clipboard.");
+    }
+
+    private String buildSettingsExportCommands(AppSettingsConfig.SettingsValues values) {
+        AppSettingsConfig.SettingsValues safe = AppSettingsConfig.sanitize(values);
+        Map<String, String> env = buildRuntimeEnvironment(safe);
+        StringBuilder sb = new StringBuilder();
+        sb.append(isWindows()
+                ? "# PowerShell environment exports\n"
+                : "# zsh/bash environment exports\n");
+        for (Map.Entry<String, String> entry : env.entrySet()) {
+            String key = entry.getKey();
+            String value = entry.getValue();
+            if (value == null || value.isBlank()) {
+                continue;
+            }
+            if (isWindows()) {
+                sb.append("$env:").append(key).append("=").append(quotePowerShell(value)).append("\n");
+            } else {
+                sb.append("export ").append(key).append("=").append(quotePosix(value)).append("\n");
+            }
+        }
+        return sb.toString();
+    }
+
+    private String quotePosix(String value) {
+        String safe = value == null ? "" : value;
+        return "\"" + safe.replace("\\", "\\\\").replace("\"", "\\\"") + "\"";
+    }
+
+    private String quotePowerShell(String value) {
+        String safe = value == null ? "" : value;
+        return "\"" + safe.replace("`", "``").replace("\"", "`\"") + "\"";
+    }
+
+    private void appendSettingsLog(String line) {
+        if (settingsLogArea == null) {
+            return;
+        }
+        settingsLogArea.append(line + "\n");
+        settingsLogArea.setCaretPosition(settingsLogArea.getDocument().getLength());
+    }
+
+    private void applySettingsToRuntime(AppSettingsConfig.SettingsValues values, boolean syncUi) {
+        AppSettingsConfig.SettingsValues safe = AppSettingsConfig.sanitize(values);
+        appSettings = safe;
+
+        if (syncUi) {
+            populateSettingsForm(safe);
+        }
+        if (hostField != null) {
+            hostField.setText(safe.backendHost());
+        }
+        if (portField != null) {
+            portField.setText(String.valueOf(safe.backendPort()));
+        }
+        if (systemConfigHostField != null) {
+            systemConfigHostField.setText(safe.backendHost());
+        }
+        if (systemConfigPortField != null) {
+            systemConfigPortField.setText(String.valueOf(safe.backendPort()));
+        }
+        if (systemConfigAiPathField != null) {
+            systemConfigAiPathField.setText(safe.aiRepoPath());
+        }
+        if (systemConfigOpsPathField != null) {
+            systemConfigOpsPathField.setText(safe.opsRepoPath());
+        }
+        if (backendPathField != null) {
+            backendPathField.setText(expandUserHome(safe.aiRepoPath()));
+        }
+
+        apiClient.configure(safe.backendHost(), safe.backendPort());
+        apiClient.setLocalCommandEnvironment(buildRuntimeEnvironment(safe));
+    }
+
+    private Map<String, String> buildRuntimeEnvironment(AppSettingsConfig.SettingsValues settings) {
+        AppSettingsConfig.SettingsValues safe = AppSettingsConfig.sanitize(settings);
+        Map<String, String> env = new LinkedHashMap<>();
+        env.put("LLM_PROVIDER", safe.llmProvider());
+        env.put("ANTHROPIC_API_KEY", safe.anthropicApiKey());
+        env.put("OPENAI_API_KEY", safe.openAiApiKey());
+        env.put("NEWS_API_KEY", safe.newsApiKey());
+        env.put("SLACK_WEBHOOK_URL", safe.slackWebhookUrl());
+        env.put("DPOLARIS_DATA_DIR", safe.dataDir());
+        return env;
+    }
+
+    private void applyEnvironmentValues(Map<String, String> target, Map<String, String> values) {
+        if (target == null || values == null) {
+            return;
+        }
+        for (Map.Entry<String, String> entry : values.entrySet()) {
+            String key = entry.getKey();
+            String value = entry.getValue();
+            if (key == null || key.isBlank()) {
+                continue;
+            }
+            if (value == null || value.isBlank()) {
+                target.remove(key);
+            } else {
+                target.put(key, value);
+            }
+        }
+    }
+
+    private SystemControlConfig.ConfigValues toSystemControlConfig(AppSettingsConfig.SettingsValues settings) {
+        AppSettingsConfig.SettingsValues safe = AppSettingsConfig.sanitize(settings);
+        return SystemControlConfig.sanitize(new SystemControlConfig.ConfigValues(
+                safe.backendHost(),
+                safe.backendPort(),
+                safe.aiRepoPath(),
+                safe.opsRepoPath(),
+                SystemControlConfig.DEFAULT_DEVICE_PREFERENCE
+        ));
+    }
+
     private void refreshStartupBanner(boolean backendHealthy) {
         if (startupBannerPanel == null) {
             return;
@@ -9426,6 +9960,11 @@ public final class DPolarisJavaApp {
         try {
             SystemControlConfig.save(values);
             applyConfigToUi(values);
+            try {
+                AppSettingsConfig.save(appSettings);
+            } catch (Exception ignored) {
+                // Legacy save path should not fail because settings persistence is unavailable.
+            }
             if (systemConfigStatusLabel != null) {
                 styleInlineStatus(systemConfigStatusLabel, "Config: saved", COLOR_SUCCESS);
             }
@@ -9459,25 +9998,44 @@ public final class DPolarisJavaApp {
         if (backendPathField != null) {
             backendPathField.setText(expandUserHome(safe.aiRepoPath()));
         }
-        configureClientFromUI();
+        AppSettingsConfig.SettingsValues baseline = appSettings == null
+                ? AppSettingsConfig.defaults()
+                : appSettings;
+        appSettings = AppSettingsConfig.sanitize(new AppSettingsConfig.SettingsValues(
+                safe.backendHost(),
+                safe.backendPort(),
+                baseline.llmProvider(),
+                baseline.anthropicApiKey(),
+                baseline.openAiApiKey(),
+                baseline.newsApiKey(),
+                baseline.slackWebhookUrl(),
+                safe.aiRepoPath(),
+                safe.opsRepoPath(),
+                baseline.dataDir()
+        ));
+        populateSettingsForm(appSettings);
+        apiClient.configure(appSettings.backendHost(), appSettings.backendPort());
+        apiClient.setLocalCommandEnvironment(buildRuntimeEnvironment(appSettings));
     }
 
     private String resolveConfiguredAiPath() {
+        String fallback = appSettings == null ? initialControlConfig.aiRepoPath() : appSettings.aiRepoPath();
         String raw = systemConfigAiPathField == null
-                ? initialControlConfig.aiRepoPath()
+                ? fallback
                 : systemConfigAiPathField.getText().trim();
         if (raw == null || raw.isBlank()) {
-            raw = initialControlConfig.aiRepoPath();
+            raw = fallback;
         }
         return expandUserHome(raw);
     }
 
     private String resolveConfiguredOpsPath() {
+        String fallback = appSettings == null ? initialControlConfig.opsRepoPath() : appSettings.opsRepoPath();
         String raw = systemConfigOpsPathField == null
-                ? initialControlConfig.opsRepoPath()
+                ? fallback
                 : systemConfigOpsPathField.getText().trim();
         if (raw == null || raw.isBlank()) {
-            raw = initialControlConfig.opsRepoPath();
+            raw = fallback;
         }
         return raw;
     }
@@ -10014,6 +10572,11 @@ public final class DPolarisJavaApp {
         backendStarting = true;
         refreshBackendControls();
         appendBackendLog(ts() + " | Starting AI backend from: " + backendPath);
+        AppSettingsConfig.SettingsValues runtimeSettings = appSettings == null
+                ? AppSettingsConfig.defaults()
+                : AppSettingsConfig.sanitize(appSettings);
+        String targetHost = runtimeSettings.backendHost();
+        int targetPort = runtimeSettings.backendPort();
 
         SwingWorker<Void, Void> worker = new SwingWorker<>() {
             private boolean reusedExternal;
@@ -10048,13 +10611,14 @@ public final class DPolarisJavaApp {
                     }
                 }
 
-                List<String> command = buildBackendCommand(backendPath);
+                List<String> command = buildBackendCommand(backendPath, targetHost, targetPort);
                 appendBackendLog(ts() + " | Command: " + String.join(" ", command));
 
                 ProcessBuilder builder = new ProcessBuilder(command);
                 builder.directory(backendDir);
                 builder.redirectErrorStream(true);
                 builder.environment().put("PYTHONUNBUFFERED", "1");
+                applyEnvironmentValues(builder.environment(), buildRuntimeEnvironment(runtimeSettings));
 
                 Process process = builder.start();
                 backendProcess = process;
@@ -10100,7 +10664,7 @@ public final class DPolarisJavaApp {
         worker.execute();
     }
 
-    private List<String> buildBackendCommand(String backendPath) {
+    private List<String> buildBackendCommand(String backendPath, String host, int port) {
         String venvPython = isWindows()
                 ? backendPath + File.separator + ".venv" + File.separator + "Scripts" + File.separator + "python.exe"
                 : backendPath + File.separator + ".venv" + File.separator + "bin" + File.separator + "python";
@@ -10127,7 +10691,18 @@ public final class DPolarisJavaApp {
                 }
             }
         }
-        return List.of(pythonExecutable, "-m", "cli.main", "server");
+        String safeHost = host == null || host.isBlank() ? "127.0.0.1" : host.trim();
+        int safePort = port > 0 ? port : 8420;
+        return List.of(
+                pythonExecutable,
+                "-m",
+                "cli.main",
+                "server",
+                "--host",
+                safeHost,
+                "--port",
+                String.valueOf(safePort)
+        );
     }
 
     private void startBackendLogPump(Process process) {

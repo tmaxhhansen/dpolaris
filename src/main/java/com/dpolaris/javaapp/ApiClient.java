@@ -25,6 +25,7 @@ final class ApiClient {
     private static final Pattern HEARTBEAT_PATTERN = Pattern.compile("(?i)\\blast[_\\s-]?heartbeat\\s*[:=]\\s*([^\\n\\r]+)");
     private static final Pattern LAST_SCAN_PATTERN = Pattern.compile("(?i)\\blast[_\\s-]?scan[_\\s-]?run\\s*[:=]\\s*([^\\n\\r]+)");
     private final HttpClient client;
+    private Map<String, String> localCommandEnvironment = new LinkedHashMap<>();
     private String host;
     private int port;
 
@@ -40,6 +41,20 @@ final class ApiClient {
     void configure(String host, int port) {
         this.host = host;
         this.port = port;
+    }
+
+    void setLocalCommandEnvironment(Map<String, String> environment) {
+        this.localCommandEnvironment = new LinkedHashMap<>();
+        if (environment == null) {
+            return;
+        }
+        for (Map.Entry<String, String> entry : environment.entrySet()) {
+            String key = entry.getKey();
+            if (key == null || key.isBlank()) {
+                continue;
+            }
+            this.localCommandEnvironment.put(key, entry.getValue());
+        }
     }
 
     boolean healthCheck() {
@@ -704,6 +719,18 @@ final class ApiClient {
 
         ProcessBuilder builder = new ProcessBuilder(command);
         builder.directory(workingDirectory);
+        if (!localCommandEnvironment.isEmpty()) {
+            Map<String, String> env = builder.environment();
+            for (Map.Entry<String, String> entry : localCommandEnvironment.entrySet()) {
+                String key = entry.getKey();
+                String value = entry.getValue();
+                if (value == null || value.isBlank()) {
+                    env.remove(key);
+                } else {
+                    env.put(key, value);
+                }
+            }
+        }
         Process process = builder.start();
 
         StringBuilder stdoutBuffer = new StringBuilder();
