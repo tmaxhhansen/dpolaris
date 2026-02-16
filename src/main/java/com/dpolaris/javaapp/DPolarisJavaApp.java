@@ -107,6 +107,7 @@ public final class DPolarisJavaApp {
     private static final Color COLOR_MENU_ACTIVE = new Color(64, 86, 133);
     private static final String VIEW_AI_MANAGEMENT = "AI_MANAGEMENT";
     private static final String VIEW_DEEP_LEARNING = "DEEP_LEARNING";
+    private static final String VIEW_ANALYSIS = "ANALYSIS";
     private static final String VIEW_DASHBOARD = "DASHBOARD";
     private static final String VIEW_TRAINING_RUNS = "TRAINING_RUNS";
     private static final String VIEW_PREDICTION_INSPECTOR = "PREDICTION_INSPECTOR";
@@ -211,11 +212,13 @@ public final class DPolarisJavaApp {
     private JTextArea dashboardInsightsArea;
     private JButton navAiManagementButton;
     private JButton navDeepLearningButton;
+    private JButton navAnalysisButton;
     private JButton navDashboardButton;
     private JButton navTrainingRunsButton;
     private JButton navPredictionInspectorButton;
     private JPanel contentPanel;
     private CardLayout contentLayout;
+    private AnalysisWorkspacePanel analysisWorkspacePanel;
 
     private JTextField inspectorTickerField;
     private JTextField inspectorTimestampField;
@@ -500,6 +503,8 @@ public final class DPolarisJavaApp {
         contentPanel.setBackground(COLOR_BG);
         contentPanel.add(createAiManagementPanel(), VIEW_AI_MANAGEMENT);
         contentPanel.add(createDeepLearningPanel(), VIEW_DEEP_LEARNING);
+        analysisWorkspacePanel = new AnalysisWorkspacePanel(apiClient, uiFont, monoFont);
+        contentPanel.add(analysisWorkspacePanel, VIEW_ANALYSIS);
         contentPanel.add(createDashboardPanel(), VIEW_DASHBOARD);
         contentPanel.add(createTrainingRunsPanel(), VIEW_TRAINING_RUNS);
         contentPanel.add(createPredictionInspectorPanel(), VIEW_PREDICTION_INSPECTOR);
@@ -511,6 +516,7 @@ public final class DPolarisJavaApp {
         checkConnectionButton.addActionListener(e -> checkConnection());
         navAiManagementButton.addActionListener(e -> showView(VIEW_AI_MANAGEMENT));
         navDeepLearningButton.addActionListener(e -> showView(VIEW_DEEP_LEARNING));
+        navAnalysisButton.addActionListener(e -> showView(VIEW_ANALYSIS));
         navDashboardButton.addActionListener(e -> showView(VIEW_DASHBOARD));
         navTrainingRunsButton.addActionListener(e -> showView(VIEW_TRAINING_RUNS));
         navPredictionInspectorButton.addActionListener(e -> showView(VIEW_PREDICTION_INSPECTOR));
@@ -560,6 +566,11 @@ public final class DPolarisJavaApp {
         navDeepLearningButton = new JButton("Deep Learning");
         styleNavButton(navDeepLearningButton);
         buttonPanel.add(navDeepLearningButton, gbc);
+
+        gbc.gridy++;
+        navAnalysisButton = new JButton("Analysis");
+        styleNavButton(navAnalysisButton);
+        buttonPanel.add(navAnalysisButton, gbc);
 
         gbc.gridy++;
         navDashboardButton = new JButton("Dashboard");
@@ -843,6 +854,9 @@ public final class DPolarisJavaApp {
         universeNasdaqTable.setRowSorter(universeNasdaqSorter);
         universeWsbTable.setRowSorter(universeWsbSorter);
         universeCombinedTable.setRowSorter(universeCombinedSorter);
+        attachUniverseTableAnalysisAction(universeNasdaqTable, universeNasdaqTableModel);
+        attachUniverseTableAnalysisAction(universeWsbTable, universeWsbTableModel);
+        attachUniverseTableAnalysisAction(universeCombinedTable, universeCombinedTableModel);
 
         universeTabs = new JTabbedPane();
         styleTabbedPane(universeTabs);
@@ -1319,6 +1333,12 @@ public final class DPolarisJavaApp {
                         dlResultsArea.append(ts() + " | Deep learning completed.\n");
                         dlResultsArea.append("─".repeat(60) + "\n");
                         dlResultsArea.append(Json.pretty(result) + "\n");
+                        String reportText = extractAnalysisReportText(result);
+                        if (reportText != null && !reportText.isBlank()) {
+                            dlResultsArea.append("\n# Analysis Report\n");
+                            dlResultsArea.append(reportText.trim());
+                            dlResultsArea.append("\n");
+                        }
                         dlResultsArea.setCaretPosition(dlResultsArea.getDocument().getLength());
                     }
                     styleInlineStatus(universeStatusLabel, "Deep learning completed for " + selectedTickers.size() + " tickers", COLOR_SUCCESS);
@@ -1332,6 +1352,66 @@ public final class DPolarisJavaApp {
             }
         };
         worker.execute();
+    }
+
+    private void attachUniverseTableAnalysisAction(JTable table, UniverseTableModel model) {
+        if (table == null || model == null) {
+            return;
+        }
+        table.addMouseListener(new MouseAdapter() {
+            @Override
+            public void mouseClicked(MouseEvent e) {
+                if (e.getClickCount() != 2 || !SwingUtilities.isLeftMouseButton(e)) {
+                    return;
+                }
+                int viewRow = table.rowAtPoint(e.getPoint());
+                if (viewRow < 0) {
+                    return;
+                }
+                int modelRow = table.convertRowIndexToModel(viewRow);
+                UniverseRow row = model.getRow(modelRow);
+                if (row == null || row.ticker() == null || row.ticker().isBlank()) {
+                    return;
+                }
+                openAnalysisWorkspaceForTicker(row.ticker());
+            }
+        });
+    }
+
+    private void openAnalysisWorkspaceForTicker(String ticker) {
+        String symbol = ticker == null ? "" : ticker.trim().toUpperCase();
+        if (symbol.isBlank()) {
+            return;
+        }
+        showView(VIEW_ANALYSIS);
+        if (analysisWorkspacePanel != null) {
+            analysisWorkspacePanel.openOrGenerateForTicker(symbol);
+        }
+    }
+
+    private String extractAnalysisReportText(Map<String, Object> payload) {
+        if (payload == null || payload.isEmpty()) {
+            return "";
+        }
+        Object direct = findAnyValue(payload, "analysis_report", "report_text");
+        if (direct instanceof String text && !text.isBlank()) {
+            return text;
+        }
+        Object results = payload.get("results");
+        if (results instanceof Map<?, ?> mapRaw) {
+            Map<String, Object> map = Json.asObject(mapRaw);
+            for (Object value : map.values()) {
+                if (!(value instanceof Map<?, ?> rowRaw)) {
+                    continue;
+                }
+                Map<String, Object> row = Json.asObject(rowRaw);
+                Object textObj = findAnyValue(row, "analysis_report", "report_text");
+                if (textObj instanceof String report && !report.isBlank()) {
+                    return report;
+                }
+            }
+        }
+        return "";
     }
 
     private void refreshUniverseTabTitles() {
@@ -8042,11 +8122,15 @@ public final class DPolarisJavaApp {
         contentLayout.show(contentPanel, viewId);
         styleNavButtonState(navAiManagementButton, VIEW_AI_MANAGEMENT.equals(viewId));
         styleNavButtonState(navDeepLearningButton, VIEW_DEEP_LEARNING.equals(viewId));
+        styleNavButtonState(navAnalysisButton, VIEW_ANALYSIS.equals(viewId));
         styleNavButtonState(navDashboardButton, VIEW_DASHBOARD.equals(viewId));
         styleNavButtonState(navTrainingRunsButton, VIEW_TRAINING_RUNS.equals(viewId));
         styleNavButtonState(navPredictionInspectorButton, VIEW_PREDICTION_INSPECTOR.equals(viewId));
         if (VIEW_DEEP_LEARNING.equals(viewId)) {
             ensureDeepLearningTickersLoaded(false);
+        }
+        if (VIEW_ANALYSIS.equals(viewId) && analysisWorkspacePanel != null) {
+            analysisWorkspacePanel.refresh(false);
         }
         if (VIEW_TRAINING_RUNS.equals(viewId) && runsTableModel != null && runsTableModel.getRowCount() == 0) {
             loadRuns(false);

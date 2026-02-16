@@ -274,6 +274,60 @@ final class ApiClient {
         return Json.asObject(response);
     }
 
+    Object fetchAnalysisList(int limit) throws IOException, InterruptedException {
+        int safeLimit = Math.max(1, Math.min(limit, 500));
+        return requestWithFallback(
+                "GET",
+                List.of(
+                        "/api/analysis/list?limit=" + safeLimit,
+                        "/analysis/list?limit=" + safeLimit
+                ),
+                null,
+                30
+        );
+    }
+
+    Object fetchAnalysisBySymbol(String symbol, int limit) throws IOException, InterruptedException {
+        String normalized = symbol == null ? "" : symbol.trim().toUpperCase();
+        int safeLimit = Math.max(1, Math.min(limit, 500));
+        return requestWithFallback(
+                "GET",
+                List.of(
+                        "/api/analysis/by-symbol/" + encode(normalized) + "?limit=" + safeLimit,
+                        "/analysis/by-symbol/" + encode(normalized) + "?limit=" + safeLimit
+                ),
+                null,
+                30
+        );
+    }
+
+    Map<String, Object> fetchAnalysisArtifact(String analysisId) throws IOException, InterruptedException {
+        Object response = requestWithFallback(
+                "GET",
+                List.of(
+                        "/api/analysis/" + encode(analysisId),
+                        "/analysis/" + encode(analysisId)
+                ),
+                null,
+                30
+        );
+        return Json.asObject(response);
+    }
+
+    Map<String, Object> generateAnalysisReport(String symbol) throws IOException, InterruptedException {
+        String normalized = symbol == null ? "" : symbol.trim().toUpperCase();
+        Object response = requestWithFallback(
+                "POST",
+                List.of(
+                        "/api/analyze/report?symbol=" + encode(normalized),
+                        "/analyze/report?symbol=" + encode(normalized)
+                ),
+                "{}",
+                60
+        );
+        return Json.asObject(response);
+    }
+
     Map<String, Object> generateTradeSetup(String symbol, int horizonDays) throws IOException, InterruptedException {
         String normalized = symbol.toUpperCase();
         String path = "/api/signals/" + encode(normalized) + "?horizon_days=" + horizonDays;

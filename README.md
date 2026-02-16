@@ -61,10 +61,27 @@ Or use the shell scripts:
   - `wsb100`
   - `combined`
 - Ticker table with filter (calls `/api/universe/{name}`)
+- Double-click any ticker row:
+  - if analysis exists -> opens Analysis workspace detail
+  - if missing -> Java calls `POST /api/analyze/report?symbol=...`, saves artifact, then opens detail
 - Train button: POST `/api/jobs/deep-learning/train` with symbol, model, epochs
 - Job monitor: polls GET `/api/jobs/{id}` every 2s while running
 - Log viewer: shows last N lines from job logs
 - Predict button: calls `/api/deep-learning/predict/{symbol}`
+
+### Analysis Workspace
+- New sidebar workspace: **Analysis**
+- Filter row:
+  - ticker search
+  - optional date range (`YYYY-MM-DD`)
+  - refresh button
+- Main table columns:
+  - Date
+  - Ticker
+  - Model
+  - Summary
+- Click any row to load full report detail (header + full report text with preserved newlines)
+- Handles backend offline mode without freezing UI (error shown inline in panel)
 
 ### Universe Tab Verification (macOS)
 
@@ -76,6 +93,9 @@ Or use the shell scripts:
 3. Open Deep Learning view in Java app:
    - NASDAQ tab should populate immediately.
    - Switching tabs should be instant and keep checkbox selection per tab.
+4. Open Analysis workspace:
+   - Generated reports should list with Date/Ticker/Model/Summary.
+   - Clicking a row should render full report detail.
 
 ### Diagnostics
 - Backend process status (state, PID, uptime)
@@ -150,6 +170,7 @@ src/main/java/com/dpolaris/javaapp/
 ├── BackendProcessManager.java    # Direct process lifecycle management
 ├── BackendControlPanel.java      # Backend control UI panel
 ├── DeepLearningPanel.java        # Deep learning training UI
+├── AnalysisWorkspacePanel.java   # Analysis list + report detail workspace
 ├── ApiClient.java                # HTTP client for backend API
 └── ...
 ```
