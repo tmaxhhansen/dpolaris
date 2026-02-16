@@ -88,15 +88,25 @@ final class ApiClient {
         return requestWithFallback(
                 "GET",
                 List.of(
+                        "/api/universe/" + encode(universeId),
+                        "/universe/" + encode(universeId),
                         "/scan/universe/" + encode(universeId),
                         "/api/scan/universe/" + encode(universeId),
                         "/scan/universe?name=" + encode(universeId),
                         "/api/scan/universe?name=" + encode(universeId),
-                        "/universe/" + encode(universeId),
                         "/api/universe/" + encode(universeId)
                 ),
                 null,
                 45
+        );
+    }
+
+    Object fetchUniverseList() throws IOException, InterruptedException {
+        return requestWithFallback(
+                "GET",
+                List.of("/api/universe/list", "/universe/list"),
+                null,
+                20
         );
     }
 
@@ -161,7 +171,7 @@ final class ApiClient {
     boolean supportsScanApi() {
         if (!canReachWithFallback(
                 "GET",
-                List.of("/scan/runs", "/api/scan/runs"),
+                List.of("/api/universe/list", "/universe/list", "/scan/runs", "/api/scan/runs"),
                 6
         )) {
             return false;
@@ -169,10 +179,10 @@ final class ApiClient {
         return canReachWithFallback(
                 "GET",
                 List.of(
-                        "/scan/universe/nasdaq_top_500",
-                        "/api/scan/universe/nasdaq_top_500",
-                        "/scan/universe?name=nasdaq_top_500",
-                        "/api/scan/universe?name=nasdaq_top_500"
+                        "/api/universe/nasdaq300",
+                        "/universe/nasdaq300",
+                        "/scan/universe/nasdaq300",
+                        "/api/scan/universe/nasdaq300"
                 ),
                 10
         );

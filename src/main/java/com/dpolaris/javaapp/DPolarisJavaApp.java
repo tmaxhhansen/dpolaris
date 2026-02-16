@@ -113,6 +113,14 @@ public final class DPolarisJavaApp {
     private static final Pattern RUN_ID_PATTERN = Pattern.compile(
             "\"?(?:run_id|runId|run-id)\"?\\s*[:=]\\s*\"?([A-Za-z0-9_.:-]+)\"?"
     );
+    private static final String UNIVERSE_NASDAQ = "nasdaq300";
+    private static final String UNIVERSE_WSB = "wsb100";
+    private static final String UNIVERSE_COMBINED = "combined";
+    private static final List<String> UNIVERSE_LOAD_ORDER = List.of(
+            UNIVERSE_NASDAQ,
+            UNIVERSE_WSB,
+            UNIVERSE_COMBINED
+    );
 
     private final ApiClient apiClient = new ApiClient("127.0.0.1", 8420);
     private final RunsService runsService = new RunsService(apiClient);
@@ -1143,14 +1151,31 @@ public final class DPolarisJavaApp {
         if (universeTabs == null) {
             return;
         }
-        String universeId = activeUniverseId();
-        UniverseTableModel model = activeUniverseModel();
-        if (!forceRefresh && model != null && model.getRowCount() > 0) {
+        if (!forceRefresh && allUniverseTabsLoaded()) {
             updateUniverseMetaDisplay();
             applyUniverseFilters();
             return;
         }
-        loadUniverse(universeId, forceRefresh);
+        for (String universeId : UNIVERSE_LOAD_ORDER) {
+            loadUniverse(universeId, forceRefresh);
+        }
+    }
+
+    private boolean allUniverseTabsLoaded() {
+        return universeNasdaqTableModel != null && universeNasdaqTableModel.getRowCount() > 0
+                && universeWsbTableModel != null && universeWsbTableModel.getRowCount() > 0
+                && universeCombinedTableModel != null && universeCombinedTableModel.getRowCount() > 0;
+    }
+
+    private boolean isBackendUnreachableError(Exception throwable) {
+        String text = humanizeError(throwable).toLowerCase();
+        return text.contains("connection refused")
+                || text.contains("connectexception")
+                || text.contains("failed to connect")
+                || text.contains("connection reset")
+                || text.contains("timed out")
+                || text.contains("unknownhost")
+                || text.contains("host unreachable");
     }
 
     private void loadUniverse(String universeId, boolean forceRefresh) {
@@ -1170,13 +1195,13 @@ public final class DPolarisJavaApp {
                     Map<String, Object> payload = get();
                     List<UniverseRow> rows = parseUniverseRows(payload);
                     switch (universeId) {
-                        case "nasdaq_top_500" -> {
+                        case UNIVERSE_NASDAQ -> {
                             universeNasdaqPayload = payload;
                             if (universeNasdaqTableModel != null) {
                                 universeNasdaqTableModel.setRows(rows);
                             }
                         }
-                        case "wsb_top_500" -> {
+                        case UNIVERSE_WSB -> {
                             universeWsbPayload = payload;
                             if (universeWsbTableModel != null) {
                                 universeWsbTableModel.setRows(rows);
@@ -1204,15 +1229,28 @@ public final class DPolarisJavaApp {
                             loadText,
                             loadColor
                     );
+                    if (rows.isEmpty()) {
+                        styleInlineStatus(
+                                universeStatusLabel,
+                                "Universe: backend responded but returned 0 tickers for " + universeId,
+                                COLOR_WARNING
+                        );
+                    }
                 } catch (Exception ex) {
-                    styleInlineStatus(universeStatusLabel, "Universe: load failed", COLOR_DANGER);
+                    if (isBackendUnreachableError(ex)) {
+                        styleInlineStatus(
+                                universeStatusLabel,
+                                "Universe: backend unreachable at " + hostField.getText().trim() + ":" + portField.getText().trim(),
+                                COLOR_DANGER
+                        );
+                    } else {
+                        styleInlineStatus(
+                                universeStatusLabel,
+                                "Universe: load error for " + universeId + " (" + humanizeError(ex) + ")",
+                                COLOR_WARNING
+                        );
+                    }
                     updateUniverseMetaDisplay();
-                    JOptionPane.showMessageDialog(
-                            frame,
-                            "Failed to load " + universeId + ":\n" + humanizeError(ex),
-                            "Universe Load Failed",
-                            JOptionPane.ERROR_MESSAGE
-                    );
                 }
             }
         };
@@ -1360,6 +1398,8 @@ public final class DPolarisJavaApp {
                     payload,
                     "tickers",
                     "merged",
+                    "nasdaq300",
+                    "wsb100",
                     "nasdaq_top_500",
                     "wsb_top_500",
                     "items",
@@ -1404,9 +1444,9 @@ public final class DPolarisJavaApp {
                 try {
                     Map<String, Object> response = get();
                     styleInlineStatus(universeStatusLabel, "Universe: rebuild complete, reloading...", COLOR_SUCCESS);
-                    loadUniverse("nasdaq_top_500", true);
-                    loadUniverse("wsb_top_500", true);
-                    loadUniverse("combined_1000", true);
+                    loadUniverse(UNIVERSE_NASDAQ, true);
+                    loadUniverse(UNIVERSE_WSB, true);
+                    loadUniverse(UNIVERSE_COMBINED, true);
                     appendBackendLog(ts() + " | Universe refresh completed: "
                             + firstNonBlank(stringOrEmpty(findAnyValue(response, "status")), "ok"));
                 } catch (Exception ex) {
@@ -1428,6 +1468,8 @@ public final class DPolarisJavaApp {
         Object listCandidate = findAnyValue(payload,
                 "tickers",
                 "merged",
+                "nasdaq300",
+                "wsb100",
                 "nasdaq_top_500",
                 "wsb_top_500",
                 "symbols",
@@ -2741,12 +2783,12 @@ public final class DPolarisJavaApp {
 
     private String activeUniverseId() {
         if (universeTabs == null) {
-            return "nasdaq_top_500";
+            return UNIVERSE_NASDAQ;
         }
         return switch (universeTabs.getSelectedIndex()) {
-            case 1 -> "wsb_top_500";
-            case 2 -> "combined_1000";
-            default -> "nasdaq_top_500";
+            case 1 -> UNIVERSE_WSB;
+            case 2 -> UNIVERSE_COMBINED;
+            default -> UNIVERSE_NASDAQ;
         };
     }
 
@@ -11574,7 +11616,21 @@ public final class DPolarisJavaApp {
         }
 
         void setRows(List<UniverseRow> rows) {
-            this.rows = rows == null ? new ArrayList<>() : new ArrayList<>(rows);
+            Map<String, Boolean> selectedByTicker = new LinkedHashMap<>();
+            for (UniverseRow row : this.rows) {
+                selectedByTicker.put(row.ticker(), row.selected());
+            }
+
+            this.rows = new ArrayList<>();
+            if (rows != null) {
+                for (UniverseRow row : rows) {
+                    Boolean selected = selectedByTicker.get(row.ticker());
+                    if (selected != null) {
+                        row.setSelected(selected);
+                    }
+                    this.rows.add(row);
+                }
+            }
             fireTableDataChanged();
         }
 

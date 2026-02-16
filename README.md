@@ -56,12 +56,26 @@ Or use the shell scripts:
 - Device selection: `auto` / `cpu` / `mps` (Apple Silicon) / `cuda`
 
 ### Deep Learning Training
-- Universe dropdown (nasdaq_top_500, wsb_favorites, combined)
+- Universe tabs (NASDAQ 300 / WSB 100 / Combined) backed by:
+  - `nasdaq300`
+  - `wsb100`
+  - `combined`
 - Ticker table with filter (calls `/api/universe/{name}`)
 - Train button: POST `/api/jobs/deep-learning/train` with symbol, model, epochs
 - Job monitor: polls GET `/api/jobs/{id}` every 2s while running
 - Log viewer: shows last N lines from job logs
 - Predict button: calls `/api/deep-learning/predict/{symbol}`
+
+### Universe Tab Verification (macOS)
+
+1. Start backend:
+   - `cd ~/my-git/dPolaris_ai && ./.venv/bin/python -m cli.main server --host 127.0.0.1 --port 8420`
+2. Verify backend universes:
+   - `curl http://127.0.0.1:8420/api/universe/list`
+   - `curl http://127.0.0.1:8420/api/universe/nasdaq300`
+3. Open Deep Learning view in Java app:
+   - NASDAQ tab should populate immediately.
+   - Switching tabs should be instant and keep checkbox selection per tab.
 
 ### Diagnostics
 - Backend process status (state, PID, uptime)

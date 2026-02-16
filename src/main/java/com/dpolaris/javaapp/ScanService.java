@@ -1,6 +1,7 @@
 package com.dpolaris.javaapp;
 
 import java.util.ArrayList;
+import java.util.Collections;
 import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
@@ -17,6 +18,46 @@ final class ScanService {
         String key = "scan:universe:" + normalizeKey(universeId);
         Object response = cache.get(key, forceRefresh, () -> apiClient.fetchUniverse(universeId));
         return unwrapObject(response, "universe", "item", "data");
+    }
+
+    List<String> listUniverses(boolean forceRefresh) throws Exception {
+        Object response = cache.get("scan:universes:list", forceRefresh, apiClient::fetchUniverseList);
+
+        if (response instanceof List<?> rawList) {
+            List<String> names = new ArrayList<>();
+            for (Object item : rawList) {
+                String value = asString(item);
+                if (!value.isBlank()) {
+                    names.add(value);
+                }
+            }
+            return names;
+        }
+
+        if (response instanceof Map<?, ?> mapRaw) {
+            Map<String, Object> map = Json.asObject(mapRaw);
+            Object universesValue = firstValue(map, "universes", "items", "data");
+            if (universesValue instanceof List<?> list) {
+                List<String> names = new ArrayList<>();
+                for (Object item : list) {
+                    if (item instanceof String text) {
+                        String cleaned = text.trim();
+                        if (!cleaned.isBlank()) {
+                            names.add(cleaned);
+                        }
+                    } else if (item instanceof Map<?, ?> itemMapRaw) {
+                        Map<String, Object> itemMap = Json.asObject(itemMapRaw);
+                        String name = asString(firstValue(itemMap, "name", "id", "universe"));
+                        if (!name.isBlank()) {
+                            names.add(name);
+                        }
+                    }
+                }
+                return names;
+            }
+        }
+
+        return Collections.emptyList();
     }
 
     Map<String, Object> startScan(Map<String, Object> payload) throws Exception {
