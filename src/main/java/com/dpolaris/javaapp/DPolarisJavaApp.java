@@ -116,7 +116,7 @@ public final class DPolarisJavaApp {
     );
     private static final String UNIVERSE_NASDAQ = "nasdaq300";
     private static final String UNIVERSE_WSB = "wsb100";
-    private static final String UNIVERSE_COMBINED = "combined";
+    private static final String UNIVERSE_COMBINED = "combined400";
     private static final List<String> UNIVERSE_LOAD_ORDER = List.of(
             UNIVERSE_NASDAQ,
             UNIVERSE_WSB,
@@ -359,6 +359,9 @@ public final class DPolarisJavaApp {
     private Map<String, Object> universeNasdaqPayload = new LinkedHashMap<>();
     private Map<String, Object> universeWsbPayload = new LinkedHashMap<>();
     private Map<String, Object> universeCombinedPayload = new LinkedHashMap<>();
+    private final Object universeAnalysisDateCacheLock = new Object();
+    private Map<String, String> universeAnalysisDateCache = new LinkedHashMap<>();
+    private long universeAnalysisDateCacheLoadedAtMs = 0L;
 
     private JTextField scanRunIdField;
     private JButton scanLoadResultsButton;
@@ -818,6 +821,7 @@ public final class DPolarisJavaApp {
         universeRunScanButton = new JButton("Run Deep Learning");
         universeStatusLabel = new JLabel();
         universeMetaLabel = new JLabel();
+        universeHashLabel = new JLabel();
 
         styleInputField(universeSearchField);
         styleInputField(universeSectorFilterField);
@@ -830,6 +834,7 @@ public final class DPolarisJavaApp {
         universeRunScanButton.setToolTipText("Run deep learning on selected tickers");
         styleInlineStatus(universeStatusLabel, "Select tickers and click Run Deep Learning", COLOR_MUTED);
         styleInlineStatus(universeMetaLabel, "", COLOR_MUTED);
+        styleInlineStatus(universeHashLabel, "", COLOR_MUTED);
 
         universeNasdaqTableModel = new UniverseTableModel();
         universeWsbTableModel = new UniverseTableModel();
@@ -862,7 +867,7 @@ public final class DPolarisJavaApp {
         styleTabbedPane(universeTabs);
         universeTabs.addTab("NASDAQ 300", createUniverseTablePane(universeNasdaqTable, "NASDAQ 300 Stocks"));
         universeTabs.addTab("WSB 100", createUniverseTablePane(universeWsbTable, "WallStreetBets Top 100"));
-        universeTabs.addTab("Combined", createUniverseTablePane(universeCombinedTable, "Combined Universe"));
+        universeTabs.addTab("Combined 400", createUniverseTablePane(universeCombinedTable, "Combined Universe"));
 
         JPanel filters = new JPanel(new FlowLayout(FlowLayout.LEFT, 8, 0));
         filters.setOpaque(false);
@@ -886,6 +891,7 @@ public final class DPolarisJavaApp {
         metaRow.setOpaque(false);
         metaRow.add(universeStatusLabel);
         metaRow.add(universeMetaLabel);
+        metaRow.add(universeHashLabel);
 
         JPanel top = createCardPanel();
         top.add(createSectionHeader("Deep Learning - Stock Selection"), BorderLayout.NORTH);
@@ -1170,9 +1176,78 @@ public final class DPolarisJavaApp {
             applyUniverseFilters();
             return;
         }
-        for (String universeId : UNIVERSE_LOAD_ORDER) {
-            loadUniverse(universeId, forceRefresh);
-        }
+
+        styleInlineStatus(universeStatusLabel, "Universe: loading catalog...", COLOR_WARNING);
+        setUniverseControlsEnabled(false);
+
+        SwingWorker<List<String>, Void> worker = new SwingWorker<>() {
+            @Override
+            protected List<String> doInBackground() throws Exception {
+                return scanService.listUniverses(forceRefresh);
+            }
+
+            @Override
+            protected void done() {
+                try {
+                    List<String> names = get();
+                    if (names == null || names.isEmpty()) {
+                        setUniverseControlsEnabled(false);
+                        styleInlineStatus(
+                                universeStatusLabel,
+                                "Universe: backend returned empty /api/universe/list",
+                                COLOR_WARNING
+                        );
+                        return;
+                    }
+
+                    String nasdaqRequest = resolveUniverseRequestId(names, UNIVERSE_NASDAQ);
+                    String wsbRequest = resolveUniverseRequestId(names, UNIVERSE_WSB);
+                    String combinedRequest = resolveUniverseRequestId(names, UNIVERSE_COMBINED);
+
+                    if (nasdaqRequest == null || wsbRequest == null || combinedRequest == null) {
+                        setUniverseControlsEnabled(false);
+                        styleInlineStatus(
+                                universeStatusLabel,
+                                "Universe: required universes missing in /api/universe/list",
+                                COLOR_WARNING
+                        );
+                        return;
+                    }
+
+                    setUniverseControlsEnabled(true);
+                    loadUniverse(UNIVERSE_NASDAQ, nasdaqRequest, forceRefresh);
+                    loadUniverse(UNIVERSE_WSB, wsbRequest, forceRefresh);
+                    loadUniverse(UNIVERSE_COMBINED, combinedRequest, forceRefresh);
+                } catch (Exception ex) {
+                    String error = humanizeError(ex).toLowerCase();
+                    if (error.contains("404") && error.contains("universe") && error.contains("list")) {
+                        styleInlineStatus(
+                                universeStatusLabel,
+                                "Universe: backend missing /api/universe/list (refresh disabled)",
+                                COLOR_DANGER
+                        );
+                        setUniverseControlsEnabled(false);
+                        return;
+                    }
+                    if (isBackendUnreachableError(ex)) {
+                        styleInlineStatus(
+                                universeStatusLabel,
+                                "Universe: backend unreachable at " + hostField.getText().trim() + ":" + portField.getText().trim(),
+                                COLOR_DANGER
+                        );
+                        setUniverseControlsEnabled(false);
+                        return;
+                    }
+                    setUniverseControlsEnabled(false);
+                    styleInlineStatus(
+                            universeStatusLabel,
+                            "Universe: failed to load catalog (" + humanizeError(ex) + ")",
+                            COLOR_WARNING
+                    );
+                }
+            }
+        };
+        worker.execute();
     }
 
     private boolean allUniverseTabsLoaded() {
@@ -1192,23 +1267,28 @@ public final class DPolarisJavaApp {
                 || text.contains("host unreachable");
     }
 
-    private void loadUniverse(String universeId, boolean forceRefresh) {
+    private void loadUniverse(String canonicalUniverseId, String requestUniverseId, boolean forceRefresh) {
         if (universeStatusLabel != null) {
-            styleInlineStatus(universeStatusLabel, "Universe: loading " + universeId + "...", COLOR_WARNING);
+            styleInlineStatus(universeStatusLabel, "Universe: loading " + canonicalUniverseId + "...", COLOR_WARNING);
         }
 
         SwingWorker<Map<String, Object>, Void> worker = new SwingWorker<>() {
             @Override
             protected Map<String, Object> doInBackground() throws Exception {
-                return scanService.getUniverse(universeId, forceRefresh);
+                Map<String, Object> bundle = new LinkedHashMap<>();
+                bundle.put("payload", scanService.getUniverse(requestUniverseId, forceRefresh));
+                bundle.put("analysis_dates", loadAnalysisDatesByTicker(forceRefresh));
+                return bundle;
             }
 
             @Override
             protected void done() {
                 try {
-                    Map<String, Object> payload = get();
-                    List<UniverseRow> rows = parseUniverseRows(payload);
-                    switch (universeId) {
+                    Map<String, Object> bundle = get();
+                    Map<String, Object> payload = asMap(bundle.get("payload"));
+                    Map<String, String> analysisDates = asStringMap(bundle.get("analysis_dates"));
+                    List<UniverseRow> rows = parseUniverseRows(payload, analysisDates);
+                    switch (canonicalUniverseId) {
                         case UNIVERSE_NASDAQ -> {
                             universeNasdaqPayload = payload;
                             if (universeNasdaqTableModel != null) {
@@ -1236,8 +1316,8 @@ public final class DPolarisJavaApp {
                     int returned = rows.size();
                     Color loadColor = requested > 0 && returned < requested ? COLOR_WARNING : COLOR_SUCCESS;
                     String loadText = requested > 0
-                            ? "Universe: loaded " + returned + "/" + requested + " tickers (" + universeId + ")"
-                            : "Universe: loaded " + returned + " tickers (" + universeId + ")";
+                            ? "Universe: loaded " + returned + "/" + requested + " tickers (" + canonicalUniverseId + ")"
+                            : "Universe: loaded " + returned + " tickers (" + canonicalUniverseId + ")";
                     styleInlineStatus(
                             universeStatusLabel,
                             loadText,
@@ -1246,7 +1326,7 @@ public final class DPolarisJavaApp {
                     if (rows.isEmpty()) {
                         styleInlineStatus(
                                 universeStatusLabel,
-                                "Universe: backend responded but returned 0 tickers for " + universeId,
+                                "Universe: backend responded but returned 0 tickers for " + canonicalUniverseId,
                                 COLOR_WARNING
                         );
                     }
@@ -1260,7 +1340,7 @@ public final class DPolarisJavaApp {
                     } else {
                         styleInlineStatus(
                                 universeStatusLabel,
-                                "Universe: load error for " + universeId + " (" + humanizeError(ex) + ")",
+                                "Universe: load error for " + canonicalUniverseId + " (" + humanizeError(ex) + ")",
                                 COLOR_WARNING
                         );
                     }
@@ -1428,7 +1508,7 @@ public final class DPolarisJavaApp {
         );
         universeTabs.setTitleAt(
                 2,
-                buildUniverseTabTitle("Combined", universeCombinedPayload, universeCombinedTableModel)
+                buildUniverseTabTitle("Combined 400", universeCombinedPayload, universeCombinedTableModel)
         );
     }
 
@@ -1497,6 +1577,136 @@ public final class DPolarisJavaApp {
         return -1;
     }
 
+    private void setUniverseControlsEnabled(boolean enabled) {
+        if (universeRefreshButton != null) {
+            universeRefreshButton.setEnabled(enabled);
+        }
+        if (universeRefreshNowButton != null) {
+            universeRefreshNowButton.setEnabled(enabled);
+        }
+        if (universeSelectAllButton != null) {
+            universeSelectAllButton.setEnabled(enabled);
+        }
+        if (universeClearSelectionButton != null) {
+            universeClearSelectionButton.setEnabled(enabled);
+        }
+    }
+
+    private String resolveUniverseRequestId(List<String> availableNames, String canonicalId) {
+        if (availableNames == null || availableNames.isEmpty()) {
+            return null;
+        }
+        Map<String, String> byNormalized = new LinkedHashMap<>();
+        for (String name : availableNames) {
+            if (name == null || name.isBlank()) {
+                continue;
+            }
+            byNormalized.put(normalizeKey(name), name);
+        }
+
+        String direct = byNormalized.get(normalizeKey(canonicalId));
+        if (direct != null) {
+            return direct;
+        }
+
+        if (UNIVERSE_NASDAQ.equals(canonicalId)) {
+            return byNormalized.get(normalizeKey("nasdaq_top_500"));
+        }
+        if (UNIVERSE_WSB.equals(canonicalId)) {
+            String alias = byNormalized.get(normalizeKey("wsb_favorites"));
+            if (alias != null) {
+                return alias;
+            }
+            return byNormalized.get(normalizeKey("wsb_top_500"));
+        }
+        if (UNIVERSE_COMBINED.equals(canonicalId)) {
+            String alias = byNormalized.get(normalizeKey("combined"));
+            if (alias != null) {
+                return alias;
+            }
+            return byNormalized.get(normalizeKey("combined_1000"));
+        }
+        return null;
+    }
+
+    private Map<String, Object> asMap(Object value) {
+        if (value instanceof Map<?, ?> mapRaw) {
+            return Json.asObject(mapRaw);
+        }
+        return new LinkedHashMap<>();
+    }
+
+    private Map<String, String> asStringMap(Object value) {
+        Map<String, String> out = new LinkedHashMap<>();
+        if (!(value instanceof Map<?, ?> raw)) {
+            return out;
+        }
+        for (Map.Entry<?, ?> entry : raw.entrySet()) {
+            String key = String.valueOf(entry.getKey() == null ? "" : entry.getKey()).trim().toUpperCase();
+            String date = stringOrEmpty(entry.getValue());
+            if (!key.isBlank() && !date.isBlank()) {
+                out.put(key, date);
+            }
+        }
+        return out;
+    }
+
+    private Map<String, String> loadAnalysisDatesByTicker(boolean forceRefresh) throws Exception {
+        long nowMs = System.currentTimeMillis();
+        synchronized (universeAnalysisDateCacheLock) {
+            if (!forceRefresh && !universeAnalysisDateCache.isEmpty() && (nowMs - universeAnalysisDateCacheLoadedAtMs) < 60_000L) {
+                return new LinkedHashMap<>(universeAnalysisDateCache);
+            }
+        }
+
+        Object payload = apiClient.fetchAnalysisList(500);
+        List<?> items;
+        if (payload instanceof List<?> list) {
+            items = list;
+        } else if (payload instanceof Map<?, ?> mapRaw) {
+            Object nested = Json.asObject(mapRaw).get("items");
+            if (nested instanceof List<?> nestedList) {
+                items = nestedList;
+            } else {
+                items = List.of();
+            }
+        } else {
+            items = List.of();
+        }
+
+        Map<String, String> latestByTicker = new LinkedHashMap<>();
+        for (Object item : items) {
+            if (!(item instanceof Map<?, ?> mapRaw)) {
+                continue;
+            }
+            Map<String, Object> row = Json.asObject(mapRaw);
+            String ticker = firstNonBlank(
+                    stringOrEmpty(findAnyValue(row, "ticker", "symbol")),
+                    ""
+            ).toUpperCase();
+            if (ticker.isBlank()) {
+                continue;
+            }
+            String date = firstNonBlank(
+                    stringOrEmpty(findAnyValue(row, "analysis_date", "created_at", "last_analysis_at")),
+                    ""
+            );
+            if (date.isBlank()) {
+                continue;
+            }
+            String existing = latestByTicker.get(ticker);
+            if (existing == null || date.compareTo(existing) > 0) {
+                latestByTicker.put(ticker, date);
+            }
+        }
+
+        synchronized (universeAnalysisDateCacheLock) {
+            universeAnalysisDateCache = new LinkedHashMap<>(latestByTicker);
+            universeAnalysisDateCacheLoadedAtMs = nowMs;
+        }
+        return latestByTicker;
+    }
+
     private void triggerUniverseRefreshNow() {
         configureClientFromUI();
         if (universeRefreshNowButton != null) {
@@ -1524,9 +1734,9 @@ public final class DPolarisJavaApp {
                 try {
                     Map<String, Object> response = get();
                     styleInlineStatus(universeStatusLabel, "Universe: rebuild complete, reloading...", COLOR_SUCCESS);
-                    loadUniverse(UNIVERSE_NASDAQ, true);
-                    loadUniverse(UNIVERSE_WSB, true);
-                    loadUniverse(UNIVERSE_COMBINED, true);
+                    loadUniverse(UNIVERSE_NASDAQ, UNIVERSE_NASDAQ, true);
+                    loadUniverse(UNIVERSE_WSB, UNIVERSE_WSB, true);
+                    loadUniverse(UNIVERSE_COMBINED, UNIVERSE_COMBINED, true);
                     appendBackendLog(ts() + " | Universe refresh completed: "
                             + firstNonBlank(stringOrEmpty(findAnyValue(response, "status")), "ok"));
                 } catch (Exception ex) {
@@ -1534,7 +1744,7 @@ public final class DPolarisJavaApp {
                     JOptionPane.showMessageDialog(
                             frame,
                             "Failed to refresh universe now:\n" + humanizeError(ex)
-                                    + "\n\nThis requires backend endpoint: POST /api/scheduler/run/universe",
+                                    + "\n\nThis requires backend endpoint: POST /api/universe/rebuild",
                             "Universe Refresh Failed",
                             JOptionPane.ERROR_MESSAGE
                     );
@@ -1544,7 +1754,7 @@ public final class DPolarisJavaApp {
         worker.execute();
     }
 
-    private List<UniverseRow> parseUniverseRows(Map<String, Object> payload) {
+    private List<UniverseRow> parseUniverseRows(Map<String, Object> payload, Map<String, String> analysisDates) {
         Object listCandidate = findAnyValue(payload,
                 "tickers",
                 "merged",
@@ -1579,19 +1789,35 @@ public final class DPolarisJavaApp {
                             "—"
                     );
                     Double marketCap = asNullableDouble(findAnyValue(map, "market_cap", "marketcap", "mcap"));
-                    Double avgDollarVolume = asNullableDouble(findAnyValue(map,
+                    Double avgVolume7d = asNullableDouble(findAnyValue(map,
+                            "avg_volume_7d",
+                            "average_volume_7d",
+                            "avg_volume",
+                            "average_volume",
                             "avg_dollar_volume",
                             "average_dollar_volume",
                             "avg_dollar_vol",
                             "dollar_volume",
                             "liquidity"));
+                    Double changePct1d = asNullableDouble(findAnyValue(map,
+                            "change_pct_1d",
+                            "change_percent_1d",
+                            "change_percent",
+                            "change_1d"));
+                    String analysisDate = firstNonBlank(
+                            stringOrEmpty(findAnyValue(map, "analysis_date", "last_analysis_at")),
+                            analysisDates == null ? "" : firstNonBlank(analysisDates.get(ticker), "")
+                    );
                     Long mentionCount = asLong(findAnyValue(map, "mention_count", "mentions", "count"));
-                    rows.add(new UniverseRow(false, ticker, name, sector, marketCap, avgDollarVolume, mentionCount, map));
+                    rows.add(new UniverseRow(false, ticker, name, sector, marketCap, avgVolume7d, changePct1d, analysisDate, mentionCount, map));
                 } else if (item != null) {
                     String ticker = String.valueOf(item).trim().toUpperCase();
                     if (!ticker.isBlank()) {
-                        rows.add(new UniverseRow(false, ticker, "—", "—", null, null, null,
-                                Map.of("ticker", ticker)));
+                        String analysisDate = analysisDates == null ? "" : firstNonBlank(analysisDates.get(ticker), "");
+                        Map<String, Object> fallbackRaw = new LinkedHashMap<>();
+                        fallbackRaw.put("ticker", ticker);
+                        rows.add(new UniverseRow(false, ticker, "—", "—", null, null, null, analysisDate, null,
+                                fallbackRaw));
                     }
                 }
             }
@@ -1644,7 +1870,7 @@ public final class DPolarisJavaApp {
         String sectorFilter = universeSectorFilterField == null
                 ? ""
                 : universeSectorFilterField.getText().trim().toLowerCase();
-        double minLiquidity = universeLiquidityFilterSpinner == null
+        double minMarketCap = universeLiquidityFilterSpinner == null
                 ? 0.0
                 : Json.asDouble(universeLiquidityFilterSpinner.getValue(), 0.0);
         long minMentions = universeMentionFilterSpinner == null
@@ -1669,9 +1895,9 @@ public final class DPolarisJavaApp {
                 if (!sectorFilter.isBlank() && !safeLower(row.sector()).contains(sectorFilter)) {
                     return false;
                 }
-                if (minLiquidity > 0.0) {
-                    Double liquidity = row.avgDollarVolume();
-                    if (liquidity == null || liquidity < minLiquidity) {
+                if (minMarketCap > 0.0) {
+                    Double marketCap = row.marketCap();
+                    if (marketCap == null || marketCap < minMarketCap) {
                         return false;
                     }
                 }
@@ -1735,13 +1961,15 @@ public final class DPolarisJavaApp {
         }
 
         StringBuilder csv = new StringBuilder();
-        csv.append("ticker,name,sector,market_cap,avg_dollar_volume,mention_count\n");
+        csv.append("ticker,name,sector,market_cap,avg_volume_7d,change_pct_1d,analysis_date,mention_count\n");
         for (UniverseRow row : rows) {
             csv.append(csvCell(row.ticker())).append(",");
             csv.append(csvCell(row.name())).append(",");
             csv.append(csvCell(row.sector())).append(",");
             csv.append(csvCell(row.marketCap() == null ? "" : String.valueOf(row.marketCap()))).append(",");
-            csv.append(csvCell(row.avgDollarVolume() == null ? "" : String.valueOf(row.avgDollarVolume()))).append(",");
+            csv.append(csvCell(row.avgVolume7d() == null ? "" : String.valueOf(row.avgVolume7d()))).append(",");
+            csv.append(csvCell(row.changePct1d() == null ? "" : String.valueOf(row.changePct1d()))).append(",");
+            csv.append(csvCell(row.analysisDate())).append(",");
             csv.append(csvCell(row.mentionCount() == null ? "" : String.valueOf(row.mentionCount()))).append("\n");
         }
         try {
@@ -8709,6 +8937,9 @@ public final class DPolarisJavaApp {
     }
 
     private void styleInlineStatus(JLabel label, String text, Color color) {
+        if (label == null) {
+            return;
+        }
         label.setText(text);
         label.setFont(uiFont.deriveFont(Font.BOLD, 12f));
         label.setForeground(color);
@@ -11644,7 +11875,9 @@ public final class DPolarisJavaApp {
                 "Name",
                 "Sector",
                 "Market Cap",
-                "Avg $ Volume",
+                "Avg Vol (7d)",
+                "1D Change",
+                "Analysis Date",
                 "Mentions"
         };
         private List<UniverseRow> rows = new ArrayList<>();
@@ -11692,9 +11925,11 @@ public final class DPolarisJavaApp {
                 case 1 -> row.ticker();
                 case 2 -> row.name();
                 case 3 -> row.sector();
-                case 4 -> formatMoney(row.marketCap());
-                case 5 -> formatMoney(row.avgDollarVolume());
-                case 6 -> row.mentionCount() == null ? "—" : String.valueOf(row.mentionCount());
+                case 4 -> formatMarketCap(row.marketCap());
+                case 5 -> formatVolume(row.avgVolume7d());
+                case 6 -> formatChangePercent(row.changePct1d());
+                case 7 -> formatAnalysisDate(row.analysisDate());
+                case 8 -> row.mentionCount() == null ? "—" : String.valueOf(row.mentionCount());
                 default -> "";
             };
         }
@@ -11747,17 +11982,59 @@ public final class DPolarisJavaApp {
             return new ArrayList<>(rows);
         }
 
-        private String formatMoney(Double value) {
+        private String formatMarketCap(Double value) {
             if (value == null || !Double.isFinite(value)) {
                 return "—";
             }
-            if (Math.abs(value) >= 1_000_000_000.0) {
-                return String.format("$%.2fB", value / 1_000_000_000.0);
+            double abs = Math.abs(value);
+            if (abs >= 1_000_000_000_000.0) {
+                return String.format("%.2fT", value / 1_000_000_000_000.0);
             }
-            if (Math.abs(value) >= 1_000_000.0) {
-                return String.format("$%.2fM", value / 1_000_000.0);
+            if (abs >= 1_000_000_000.0) {
+                return String.format("%.1fB", value / 1_000_000_000.0);
             }
-            return String.format("$%,.0f", value);
+            if (abs >= 1_000_000.0) {
+                return String.format("%.1fM", value / 1_000_000.0);
+            }
+            if (abs >= 1_000.0) {
+                return String.format("%.1fK", value / 1_000.0);
+            }
+            return String.format("%.0f", value);
+        }
+
+        private String formatVolume(Double value) {
+            if (value == null || !Double.isFinite(value)) {
+                return "—";
+            }
+            double abs = Math.abs(value);
+            if (abs >= 1_000_000_000.0) {
+                return String.format("%.1fB", value / 1_000_000_000.0);
+            }
+            if (abs >= 1_000_000.0) {
+                return String.format("%.1fM", value / 1_000_000.0);
+            }
+            if (abs >= 1_000.0) {
+                return String.format("%.1fK", value / 1_000.0);
+            }
+            return String.format("%.0f", value);
+        }
+
+        private String formatChangePercent(Double value) {
+            if (value == null || !Double.isFinite(value)) {
+                return "—";
+            }
+            return String.format("%+.2f%%", value);
+        }
+
+        private String formatAnalysisDate(String value) {
+            String raw = value == null ? "" : value.trim();
+            if (raw.isBlank()) {
+                return "—";
+            }
+            if (raw.length() >= 16 && raw.charAt(4) == '-' && raw.charAt(7) == '-') {
+                return raw.substring(0, 16).replace('T', ' ');
+            }
+            return raw;
         }
     }
 
@@ -11767,7 +12044,9 @@ public final class DPolarisJavaApp {
         private final String name;
         private final String sector;
         private final Double marketCap;
-        private final Double avgDollarVolume;
+        private final Double avgVolume7d;
+        private final Double changePct1d;
+        private final String analysisDate;
         private final Long mentionCount;
         private final Map<String, Object> raw;
 
@@ -11777,7 +12056,9 @@ public final class DPolarisJavaApp {
                 String name,
                 String sector,
                 Double marketCap,
-                Double avgDollarVolume,
+                Double avgVolume7d,
+                Double changePct1d,
+                String analysisDate,
                 Long mentionCount,
                 Map<String, Object> raw
         ) {
@@ -11786,7 +12067,9 @@ public final class DPolarisJavaApp {
             this.name = name == null ? "—" : name;
             this.sector = sector == null ? "—" : sector;
             this.marketCap = marketCap;
-            this.avgDollarVolume = avgDollarVolume;
+            this.avgVolume7d = avgVolume7d;
+            this.changePct1d = changePct1d;
+            this.analysisDate = analysisDate == null ? "" : analysisDate;
             this.mentionCount = mentionCount;
             this.raw = raw == null ? new LinkedHashMap<>() : raw;
         }
@@ -11815,8 +12098,16 @@ public final class DPolarisJavaApp {
             return marketCap;
         }
 
-        Double avgDollarVolume() {
-            return avgDollarVolume;
+        Double avgVolume7d() {
+            return avgVolume7d;
+        }
+
+        Double changePct1d() {
+            return changePct1d;
+        }
+
+        String analysisDate() {
+            return analysisDate;
         }
 
         Long mentionCount() {

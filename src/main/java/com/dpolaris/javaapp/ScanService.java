@@ -90,7 +90,7 @@ final class ScanService {
     }
 
     Map<String, Object> refreshUniverseNow() throws Exception {
-        Map<String, Object> response = apiClient.runSchedulerJob("universe");
+        Map<String, Object> response = apiClient.rebuildUniverse(true);
         cache.invalidateAll();
         return response;
     }

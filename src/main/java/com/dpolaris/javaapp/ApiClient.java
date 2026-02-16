@@ -475,6 +475,22 @@ final class ApiClient {
         return Json.asObject(response);
     }
 
+    Map<String, Object> rebuildUniverse(boolean force) throws IOException, InterruptedException {
+        String forceQuery = force ? "?force=true" : "?force=false";
+        Object response = requestWithFallback(
+                "POST",
+                List.of(
+                        "/api/universe/rebuild" + forceQuery,
+                        "/universe/rebuild" + forceQuery,
+                        "/api/scheduler/run/universe",
+                        "/scheduler/run/universe"
+                ),
+                "{}",
+                180
+        );
+        return Json.asObject(response);
+    }
+
     Map<String, Object> trainDeepLegacy(String symbol, String modelType, int epochs)
             throws IOException, InterruptedException {
         String path = "/api/deep-learning/train/" + encode(symbol)

@@ -56,14 +56,20 @@ Or use the shell scripts:
 - Device selection: `auto` / `cpu` / `mps` (Apple Silicon) / `cuda`
 
 ### Deep Learning Training
-- Universe tabs (NASDAQ 300 / WSB 100 / Combined) backed by:
+- Universe tabs (NASDAQ 300 / WSB 100 / Combined 400) backed by:
   - `nasdaq300`
   - `wsb100`
-  - `combined`
-- Ticker table with filter (calls `/api/universe/{name}`)
+  - `combined400`
+- Refresh action triggers backend rebuild via `POST /api/universe/rebuild` then reloads all tabs
+- Ticker table with filter (calls `/api/universe/{name}`) and metadata columns:
+  - Name
+  - Sector
+  - Market Cap
+  - Avg Volume (7d)
+  - 1D Change %
 - Double-click any ticker row:
   - if analysis exists -> opens Analysis workspace detail
-  - if missing -> Java calls `POST /api/analyze/report?symbol=...`, saves artifact, then opens detail
+  - if missing -> shows `No analysis yet for SYMBOL` in Analysis workspace
 - Train button: POST `/api/jobs/deep-learning/train` with symbol, model, epochs
 - Job monitor: polls GET `/api/jobs/{id}` every 2s while running
 - Log viewer: shows last N lines from job logs
@@ -81,6 +87,7 @@ Or use the shell scripts:
   - Model
   - Summary
 - Click any row to load full report detail (header + full report text with preserved newlines)
+- Detail view includes **Open on disk** button when backend provides a local artifact `path`
 - Handles backend offline mode without freezing UI (error shown inline in panel)
 
 ### Universe Tab Verification (macOS)
@@ -90,6 +97,7 @@ Or use the shell scripts:
 2. Verify backend universes:
    - `curl http://127.0.0.1:8420/api/universe/list`
    - `curl http://127.0.0.1:8420/api/universe/nasdaq300`
+   - `curl http://127.0.0.1:8420/api/universe/combined400`
 3. Open Deep Learning view in Java app:
    - NASDAQ tab should populate immediately.
    - Switching tabs should be instant and keep checkbox selection per tab.

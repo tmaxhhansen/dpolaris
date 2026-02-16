@@ -8,6 +8,8 @@ import javax.swing.table.TableRowSorter;
 import java.awt.*;
 import java.awt.event.MouseAdapter;
 import java.awt.event.MouseEvent;
+import java.io.File;
+import java.nio.file.Path;
 import java.time.LocalDate;
 import java.time.OffsetDateTime;
 import java.time.ZoneId;
@@ -44,7 +46,9 @@ final class AnalysisWorkspacePanel extends JPanel {
 
     private final JLabel detailHeader = new JLabel("Analysis Detail");
     private final JLabel detailMeta = new JLabel("Select an analysis item.");
+    private final JButton openOnDiskButton = new JButton("Open on disk");
     private final JTextArea detailArea = new JTextArea();
+    private String detailPath = "";
 
     AnalysisWorkspacePanel(ApiClient apiClient, Font uiFont, Font monoFont) {
         this.apiClient = apiClient;
@@ -69,6 +73,8 @@ final class AnalysisWorkspacePanel extends JPanel {
         styleInput(fromDateField);
         styleInput(toDateField);
         styleButton(refreshButton);
+        styleButton(openOnDiskButton);
+        openOnDiskButton.setEnabled(false);
 
         fromDateField.setToolTipText("From date YYYY-MM-DD (optional)");
         toDateField.setToolTipText("To date YYYY-MM-DD (optional)");
@@ -86,6 +92,7 @@ final class AnalysisWorkspacePanel extends JPanel {
         fromDateField.getDocument().addDocumentListener(SimpleDocumentListener.of(this::applyFilters));
         toDateField.getDocument().addDocumentListener(SimpleDocumentListener.of(this::applyFilters));
         refreshButton.addActionListener(e -> refresh(true));
+        openOnDiskButton.addActionListener(e -> openOnDisk());
 
         statusLabel.setForeground(COLOR_MUTED);
         statusLabel.setFont(uiFont);
@@ -141,6 +148,11 @@ final class AnalysisWorkspacePanel extends JPanel {
         detailTop.add(detailHeader);
         detailTop.add(Box.createVerticalStrut(4));
         detailTop.add(detailMeta);
+        JPanel detailActions = new JPanel(new FlowLayout(FlowLayout.LEFT, 0, 0));
+        detailActions.setOpaque(false);
+        detailActions.add(openOnDiskButton);
+        detailTop.add(Box.createVerticalStrut(6));
+        detailTop.add(detailActions);
 
         detailArea.setEditable(false);
         detailArea.setFont(monoFont);
@@ -212,18 +224,22 @@ final class AnalysisWorkspacePanel extends JPanel {
                 if (!rows.isEmpty() && rows.get(0).id != null) {
                     return apiClient.fetchAnalysisArtifact(rows.get(0).id);
                 }
-                return apiClient.generateAnalysisReport(symbol);
+                return null;
             }
 
             @Override
             protected void done() {
                 try {
                     Map<String, Object> payload = get();
+                    if (payload == null || payload.isEmpty()) {
+                        renderNoAnalysis(symbol);
+                        setStatus("No analysis yet for " + symbol, COLOR_MUTED);
+                        return;
+                    }
                     renderDetail(payload);
-                    setStatus("Analysis ready for " + symbol, COLOR_SUCCESS);
-                    refresh(true);
+                    setStatus("Analysis loaded for " + symbol, COLOR_SUCCESS);
                 } catch (Exception ex) {
-                    setStatus("Failed to load/generate analysis: " + humanize(ex), COLOR_DANGER);
+                    setStatus("Failed to load analysis: " + humanize(ex), COLOR_DANGER);
                 }
             }
         };
@@ -268,10 +284,12 @@ final class AnalysisWorkspacePanel extends JPanel {
             return;
         }
 
-        String ticker = asString(payload.get("ticker")).toUpperCase();
-        String createdAt = asString(payload.get("created_at"));
+        String ticker = firstNonBlank(asString(payload.get("ticker")), asString(payload.get("symbol"))).toUpperCase();
+        String createdAt = firstNonBlank(asString(payload.get("analysis_date")), asString(payload.get("created_at")));
         String model = asString(payload.get("model_type"));
         String device = asString(payload.get("device"));
+        detailPath = asString(payload.get("path"));
+        openOnDiskButton.setEnabled(!detailPath.isBlank());
 
         detailHeader.setText(ticker.isBlank() ? "Analysis Detail" : "Analysis Detail - " + ticker);
         detailMeta.setText("Date: " + simplifyDate(createdAt) + "   Model: " + model + "   Device: " + device);
@@ -286,6 +304,15 @@ final class AnalysisWorkspacePanel extends JPanel {
             }
         }
         detailArea.setText(report);
+        detailArea.setCaretPosition(0);
+    }
+
+    private void renderNoAnalysis(String symbol) {
+        detailPath = "";
+        openOnDiskButton.setEnabled(false);
+        detailHeader.setText("Analysis Detail - " + symbol);
+        detailMeta.setText("No analysis artifact found for " + symbol + ".");
+        detailArea.setText("No analysis yet for " + symbol + ".\n\nRun a deep-learning analysis job, then refresh.");
         detailArea.setCaretPosition(0);
     }
 
@@ -311,8 +338,8 @@ final class AnalysisWorkspacePanel extends JPanel {
             }
             Map<String, Object> map = Json.asObject(itemMapRaw);
             String id = asString(map.get("id"));
-            String createdAt = asString(map.get("created_at"));
-            String ticker = asString(map.get("ticker")).toUpperCase();
+            String createdAt = firstNonBlank(asString(map.get("analysis_date")), asString(map.get("created_at")));
+            String ticker = firstNonBlank(asString(map.get("ticker")), asString(map.get("symbol"))).toUpperCase();
             String model = asString(map.get("model_type"));
             String summary = asString(map.get("summary"));
             String device = asString(map.get("device"));
@@ -423,6 +450,34 @@ final class AnalysisWorkspacePanel extends JPanel {
 
     private String asString(Object value) {
         return value == null ? "" : String.valueOf(value).trim();
+    }
+
+    private String firstNonBlank(String first, String second) {
+        if (first != null && !first.isBlank()) {
+            return first;
+        }
+        return second == null ? "" : second;
+    }
+
+    private void openOnDisk() {
+        if (detailPath == null || detailPath.isBlank()) {
+            return;
+        }
+        if (!Desktop.isDesktopSupported()) {
+            setStatus("Open-on-disk unsupported on this platform", COLOR_DANGER);
+            return;
+        }
+        Path path = Path.of(detailPath);
+        File target = path.toFile();
+        if (!target.exists()) {
+            setStatus("Artifact file no longer exists on disk", COLOR_DANGER);
+            return;
+        }
+        try {
+            Desktop.getDesktop().open(target.getParentFile() != null ? target.getParentFile() : target);
+        } catch (Exception ex) {
+            setStatus("Failed to open file path: " + humanize(ex), COLOR_DANGER);
+        }
     }
 
     private String humanize(Throwable ex) {

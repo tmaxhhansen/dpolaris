@@ -419,7 +419,7 @@ public final class DeepLearningPanel extends JPanel {
         universeLabel.setForeground(COLOR_TEXT);
         universeRow.add(universeLabel);
 
-        universeCombo = new JComboBox<>(new String[]{"nasdaq_top_500", "wsb_favorites", "combined"});
+        universeCombo = new JComboBox<>(new String[]{"nasdaq300", "wsb100", "combined400"});
         universeCombo.setFont(uiFont);
         universeCombo.setPreferredSize(new Dimension(180, 28));
         universeCombo.addActionListener(e -> loadSelectedUniverse());
