@@ -56,10 +56,10 @@ Or use the shell scripts:
 - Device selection: `auto` / `cpu` / `mps` (Apple Silicon) / `cuda`
 
 ### Deep Learning Training
-- Universe tabs (NASDAQ 300 / WSB 100 / Combined 400) backed by:
-  - `nasdaq300`
-  - `wsb100`
-  - `combined400`
+- Universe tabs (NASDAQ 500 / Watchlist / Combined) backed by:
+  - `nasdaq500`
+  - `watchlist`
+  - `combined`
 - Refresh action triggers backend rebuild via `POST /api/universe/rebuild` then reloads all tabs
 - Ticker table with filter (calls `/api/universe/{name}`) and metadata columns:
   - Name
@@ -96,10 +96,11 @@ Or use the shell scripts:
    - `cd ~/my-git/dPolaris_ai && ./.venv/bin/python -m cli.main server --host 127.0.0.1 --port 8420`
 2. Verify backend universes:
    - `curl http://127.0.0.1:8420/api/universe/list`
-   - `curl http://127.0.0.1:8420/api/universe/nasdaq300`
-   - `curl http://127.0.0.1:8420/api/universe/combined400`
+   - `curl http://127.0.0.1:8420/api/universe/nasdaq500`
+   - `curl http://127.0.0.1:8420/api/universe/watchlist`
+   - `curl http://127.0.0.1:8420/api/universe/combined`
 3. Open Deep Learning view in Java app:
-   - NASDAQ tab should populate immediately.
+   - NASDAQ and Watchlist tabs should populate without errors.
    - Switching tabs should be instant and keep checkbox selection per tab.
 4. Open Analysis workspace:
    - Generated reports should list with Date/Ticker/Model/Summary.

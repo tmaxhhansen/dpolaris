@@ -95,16 +95,25 @@ final class ScanService {
         return response;
     }
 
-    Map<String, Object> addCustomSymbol(String symbol) throws Exception {
-        Map<String, Object> response = apiClient.addCustomUniverseSymbol(symbol);
+    Map<String, Object> addWatchlistSymbol(String symbol) throws Exception {
+        Map<String, Object> response = apiClient.watchlistAdd(symbol);
         cache.invalidateAll();
         return response;
     }
 
-    Map<String, Object> removeCustomSymbol(String symbol) throws Exception {
-        Map<String, Object> response = apiClient.removeCustomUniverseSymbol(symbol);
+    Map<String, Object> removeWatchlistSymbol(String symbol) throws Exception {
+        Map<String, Object> response = apiClient.watchlistRemove(symbol);
         cache.invalidateAll();
         return response;
+    }
+
+    // Backward-compatible wrappers.
+    Map<String, Object> addCustomSymbol(String symbol) throws Exception {
+        return addWatchlistSymbol(symbol);
+    }
+
+    Map<String, Object> removeCustomSymbol(String symbol) throws Exception {
+        return removeWatchlistSymbol(symbol);
     }
 
     List<Map<String, Object>> listScanRuns(boolean forceRefresh) throws Exception {

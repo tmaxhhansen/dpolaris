@@ -207,13 +207,38 @@ final class ApiClient {
         );
     }
 
-    Map<String, Object> addCustomUniverseSymbol(String symbol) throws IOException, InterruptedException {
-        String body = Json.compact(Map.of("symbol", symbol == null ? "" : symbol));
+    Map<String, Object> fetchUniverseNasdaq500() throws IOException, InterruptedException {
+        return Json.asObject(fetchUniverse("nasdaq500"));
+    }
+
+    Map<String, Object> fetchUniverseWatchlist() throws IOException, InterruptedException {
+        Object response = requestWithFallback(
+                "GET",
+                List.of(
+                        "/api/universe/watchlist",
+                        "/api/watchlist",
+                        "/api/universe/custom"
+                ),
+                null,
+                30
+        );
+        return Json.asObject(response);
+    }
+
+    Map<String, Object> fetchUniverseCombined() throws IOException, InterruptedException {
+        return Json.asObject(fetchUniverse("combined"));
+    }
+
+    Map<String, Object> watchlistAdd(String symbol) throws IOException, InterruptedException {
+        String normalized = symbol == null ? "" : symbol.trim().toUpperCase();
+        String encoded = encode(normalized);
+        String body = Json.compact(Map.of("symbol", normalized));
         Object response = requestWithFallback(
                 "POST",
                 List.of(
-                        "/api/universe/custom/add",
-                        "/universe/custom/add"
+                        "/api/watchlist/add?symbol=" + encoded,
+                        "/api/universe/watchlist/add",
+                        "/api/universe/custom/add"
                 ),
                 body,
                 30
@@ -221,18 +246,30 @@ final class ApiClient {
         return Json.asObject(response);
     }
 
-    Map<String, Object> removeCustomUniverseSymbol(String symbol) throws IOException, InterruptedException {
-        String body = Json.compact(Map.of("symbol", symbol == null ? "" : symbol));
+    Map<String, Object> watchlistRemove(String symbol) throws IOException, InterruptedException {
+        String normalized = symbol == null ? "" : symbol.trim().toUpperCase();
+        String encoded = encode(normalized);
+        String body = Json.compact(Map.of("symbol", normalized));
         Object response = requestWithFallback(
                 "POST",
                 List.of(
-                        "/api/universe/custom/remove",
-                        "/universe/custom/remove"
+                        "/api/watchlist/remove?symbol=" + encoded,
+                        "/api/universe/watchlist/remove",
+                        "/api/universe/custom/remove"
                 ),
                 body,
                 30
         );
         return Json.asObject(response);
+    }
+
+    // Backward-compatible wrappers.
+    Map<String, Object> addCustomUniverseSymbol(String symbol) throws IOException, InterruptedException {
+        return watchlistAdd(symbol);
+    }
+
+    Map<String, Object> removeCustomUniverseSymbol(String symbol) throws IOException, InterruptedException {
+        return watchlistRemove(symbol);
     }
 
     Map<String, Object> predictSymbol(String symbol) throws IOException, InterruptedException {
