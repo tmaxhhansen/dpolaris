@@ -95,6 +95,18 @@ final class ScanService {
         return response;
     }
 
+    Map<String, Object> addCustomSymbol(String symbol) throws Exception {
+        Map<String, Object> response = apiClient.addCustomUniverseSymbol(symbol);
+        cache.invalidateAll();
+        return response;
+    }
+
+    Map<String, Object> removeCustomSymbol(String symbol) throws Exception {
+        Map<String, Object> response = apiClient.removeCustomUniverseSymbol(symbol);
+        cache.invalidateAll();
+        return response;
+    }
+
     List<Map<String, Object>> listScanRuns(boolean forceRefresh) throws Exception {
         try {
             Object response = cache.get("scan:runs:list", forceRefresh, apiClient::fetchScanRuns);

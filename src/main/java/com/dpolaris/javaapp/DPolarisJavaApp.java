@@ -114,13 +114,16 @@ public final class DPolarisJavaApp {
     private static final Pattern RUN_ID_PATTERN = Pattern.compile(
             "\"?(?:run_id|runId|run-id)\"?\\s*[:=]\\s*\"?([A-Za-z0-9_.:-]+)\"?"
     );
-    private static final String UNIVERSE_NASDAQ = "nasdaq300";
+    private static final Pattern CUSTOM_TICKER_PATTERN = Pattern.compile("^[A-Z0-9.-]{1,10}$");
+    private static final String UNIVERSE_NASDAQ = "nasdaq500";
     private static final String UNIVERSE_WSB = "wsb100";
-    private static final String UNIVERSE_COMBINED = "combined400";
+    private static final String UNIVERSE_COMBINED = "combined";
+    private static final String UNIVERSE_CUSTOM = "custom";
     private static final List<String> UNIVERSE_LOAD_ORDER = List.of(
             UNIVERSE_NASDAQ,
             UNIVERSE_WSB,
-            UNIVERSE_COMBINED
+            UNIVERSE_COMBINED,
+            UNIVERSE_CUSTOM
     );
 
     private final ApiClient apiClient = new ApiClient("127.0.0.1", 8420);
@@ -334,9 +337,11 @@ public final class DPolarisJavaApp {
     private JTabbedPane universeMainTabs;
     private JTabbedPane universeTabs;
     private JTextField universeSearchField;
-    private JTextField universeSectorFilterField;
+    private JComboBox<String> universeSectorFilterCombo;
     private JSpinner universeLiquidityFilterSpinner;
     private JSpinner universeMentionFilterSpinner;
+    private JTextField universeAddStockField;
+    private JButton universeAddStockButton;
     private JButton universeRefreshButton;
     private JButton universeRefreshNowButton;
     private JButton universeSelectAllButton;
@@ -350,15 +355,19 @@ public final class DPolarisJavaApp {
     private UniverseTableModel universeNasdaqTableModel;
     private UniverseTableModel universeWsbTableModel;
     private UniverseTableModel universeCombinedTableModel;
+    private UniverseTableModel universeCustomTableModel;
     private JTable universeNasdaqTable;
     private JTable universeWsbTable;
     private JTable universeCombinedTable;
+    private JTable universeCustomTable;
     private TableRowSorter<UniverseTableModel> universeNasdaqSorter;
     private TableRowSorter<UniverseTableModel> universeWsbSorter;
     private TableRowSorter<UniverseTableModel> universeCombinedSorter;
+    private TableRowSorter<UniverseTableModel> universeCustomSorter;
     private Map<String, Object> universeNasdaqPayload = new LinkedHashMap<>();
     private Map<String, Object> universeWsbPayload = new LinkedHashMap<>();
     private Map<String, Object> universeCombinedPayload = new LinkedHashMap<>();
+    private Map<String, Object> universeCustomPayload = new LinkedHashMap<>();
     private final Object universeAnalysisDateCacheLock = new Object();
     private Map<String, String> universeAnalysisDateCache = new LinkedHashMap<>();
     private long universeAnalysisDateCacheLoadedAtMs = 0L;
@@ -812,9 +821,11 @@ public final class DPolarisJavaApp {
         root.setBackground(COLOR_BG);
 
         universeSearchField = new JTextField(14);
-        universeSectorFilterField = new JTextField(10);
+        universeSectorFilterCombo = new JComboBox<>(new String[]{"All"});
         universeLiquidityFilterSpinner = new JSpinner(new SpinnerNumberModel(0.0, 0.0, 1_000_000_000_000.0, 100_000.0));
         universeMentionFilterSpinner = new JSpinner(new SpinnerNumberModel(0L, 0L, 10_000_000L, 1L));
+        universeAddStockField = new JTextField(8);
+        universeAddStockButton = new JButton("Add Stock");
         universeRefreshButton = new JButton("Refresh");
         universeSelectAllButton = new JButton("Select All");
         universeClearSelectionButton = new JButton("Clear");
@@ -824,9 +835,11 @@ public final class DPolarisJavaApp {
         universeHashLabel = new JLabel();
 
         styleInputField(universeSearchField);
-        styleInputField(universeSectorFilterField);
+        styleCombo(universeSectorFilterCombo);
+        styleInputField(universeAddStockField);
         styleSpinner(universeLiquidityFilterSpinner);
         styleSpinner(universeMentionFilterSpinner);
+        styleButton(universeAddStockButton, false);
         styleButton(universeRefreshButton, false);
         styleButton(universeSelectAllButton, false);
         styleButton(universeClearSelectionButton, false);
@@ -839,46 +852,63 @@ public final class DPolarisJavaApp {
         universeNasdaqTableModel = new UniverseTableModel();
         universeWsbTableModel = new UniverseTableModel();
         universeCombinedTableModel = new UniverseTableModel();
+        universeCustomTableModel = new UniverseTableModel();
         universeNasdaqTableModel.addTableModelListener(e -> updateUniverseRunButtonState());
         universeWsbTableModel.addTableModelListener(e -> updateUniverseRunButtonState());
         universeCombinedTableModel.addTableModelListener(e -> updateUniverseRunButtonState());
+        universeCustomTableModel.addTableModelListener(e -> updateUniverseRunButtonState());
 
         universeNasdaqTable = new JTable(universeNasdaqTableModel);
         universeWsbTable = new JTable(universeWsbTableModel);
         universeCombinedTable = new JTable(universeCombinedTableModel);
+        universeCustomTable = new JTable(universeCustomTableModel);
         styleRunsTable(universeNasdaqTable);
         styleRunsTable(universeWsbTable);
         styleRunsTable(universeCombinedTable);
+        styleRunsTable(universeCustomTable);
         universeNasdaqTable.setSelectionMode(ListSelectionModel.MULTIPLE_INTERVAL_SELECTION);
         universeWsbTable.setSelectionMode(ListSelectionModel.MULTIPLE_INTERVAL_SELECTION);
         universeCombinedTable.setSelectionMode(ListSelectionModel.MULTIPLE_INTERVAL_SELECTION);
+        universeCustomTable.setSelectionMode(ListSelectionModel.MULTIPLE_INTERVAL_SELECTION);
 
         universeNasdaqSorter = new TableRowSorter<>(universeNasdaqTableModel);
         universeWsbSorter = new TableRowSorter<>(universeWsbTableModel);
         universeCombinedSorter = new TableRowSorter<>(universeCombinedTableModel);
+        universeCustomSorter = new TableRowSorter<>(universeCustomTableModel);
+        configureUniverseSorter(universeNasdaqSorter);
+        configureUniverseSorter(universeWsbSorter);
+        configureUniverseSorter(universeCombinedSorter);
+        configureUniverseSorter(universeCustomSorter);
         universeNasdaqTable.setRowSorter(universeNasdaqSorter);
         universeWsbTable.setRowSorter(universeWsbSorter);
         universeCombinedTable.setRowSorter(universeCombinedSorter);
+        universeCustomTable.setRowSorter(universeCustomSorter);
         attachUniverseTableAnalysisAction(universeNasdaqTable, universeNasdaqTableModel);
         attachUniverseTableAnalysisAction(universeWsbTable, universeWsbTableModel);
         attachUniverseTableAnalysisAction(universeCombinedTable, universeCombinedTableModel);
+        attachUniverseTableAnalysisAction(universeCustomTable, universeCustomTableModel);
+        runUniverseSortSanityCheck();
 
         universeTabs = new JTabbedPane();
         styleTabbedPane(universeTabs);
-        universeTabs.addTab("NASDAQ 300", createUniverseTablePane(universeNasdaqTable, "NASDAQ 300 Stocks"));
+        universeTabs.addTab("NASDAQ 500", createUniverseTablePane(universeNasdaqTable, "NASDAQ 500 Stocks"));
         universeTabs.addTab("WSB 100", createUniverseTablePane(universeWsbTable, "WallStreetBets Top 100"));
-        universeTabs.addTab("Combined 400", createUniverseTablePane(universeCombinedTable, "Combined Universe"));
+        universeTabs.addTab("Combined", createUniverseTablePane(universeCombinedTable, "Combined Universe"));
+        universeTabs.addTab("Custom", createUniverseTablePane(universeCustomTable, "Custom Universe"));
 
         JPanel filters = new JPanel(new FlowLayout(FlowLayout.LEFT, 8, 0));
         filters.setOpaque(false);
         filters.add(createFormLabel("Search"));
         filters.add(universeSearchField);
         filters.add(createFormLabel("Sector"));
-        filters.add(universeSectorFilterField);
+        filters.add(universeSectorFilterCombo);
         filters.add(createFormLabel("Min Market Cap"));
         filters.add(universeLiquidityFilterSpinner);
         filters.add(createFormLabel("Min Mentions"));
         filters.add(universeMentionFilterSpinner);
+        filters.add(createFormLabel("Add Stock"));
+        filters.add(universeAddStockField);
+        filters.add(universeAddStockButton);
 
         JPanel actionsRow = new JPanel(new FlowLayout(FlowLayout.LEFT, 8, 0));
         actionsRow.setOpaque(false);
@@ -908,6 +938,7 @@ public final class DPolarisJavaApp {
         universeTabs.addChangeListener(e -> {
             updateUniverseMetaDisplay();
             updateUniverseRunButtonState();
+            rebuildActiveUniverseSectorOptions();
             applyUniverseFilters();
             ensureDeepLearningTickersLoaded(false);
         });
@@ -915,17 +946,15 @@ public final class DPolarisJavaApp {
         universeSelectAllButton.addActionListener(e -> setUniverseSelection(true));
         universeClearSelectionButton.addActionListener(e -> setUniverseSelection(false));
         universeRunScanButton.addActionListener(e -> runDeepLearningOnSelected());
+        universeAddStockButton.addActionListener(e -> addCustomStockFromUi());
+        universeAddStockField.addActionListener(e -> addCustomStockFromUi());
 
         universeSearchField.getDocument().addDocumentListener(new DocumentListener() {
             @Override public void insertUpdate(DocumentEvent e) { applyUniverseFilters(); }
             @Override public void removeUpdate(DocumentEvent e) { applyUniverseFilters(); }
             @Override public void changedUpdate(DocumentEvent e) { applyUniverseFilters(); }
         });
-        universeSectorFilterField.getDocument().addDocumentListener(new DocumentListener() {
-            @Override public void insertUpdate(DocumentEvent e) { applyUniverseFilters(); }
-            @Override public void removeUpdate(DocumentEvent e) { applyUniverseFilters(); }
-            @Override public void changedUpdate(DocumentEvent e) { applyUniverseFilters(); }
-        });
+        universeSectorFilterCombo.addActionListener(e -> applyUniverseFilters());
         universeLiquidityFilterSpinner.addChangeListener(e -> applyUniverseFilters());
         universeMentionFilterSpinner.addChangeListener(e -> applyUniverseFilters());
 
@@ -1173,6 +1202,7 @@ public final class DPolarisJavaApp {
         }
         if (!forceRefresh && allUniverseTabsLoaded()) {
             updateUniverseMetaDisplay();
+            rebuildActiveUniverseSectorOptions();
             applyUniverseFilters();
             return;
         }
@@ -1203,8 +1233,9 @@ public final class DPolarisJavaApp {
                     String nasdaqRequest = resolveUniverseRequestId(names, UNIVERSE_NASDAQ);
                     String wsbRequest = resolveUniverseRequestId(names, UNIVERSE_WSB);
                     String combinedRequest = resolveUniverseRequestId(names, UNIVERSE_COMBINED);
+                    String customRequest = resolveUniverseRequestId(names, UNIVERSE_CUSTOM);
 
-                    if (nasdaqRequest == null || wsbRequest == null || combinedRequest == null) {
+                    if (nasdaqRequest == null || wsbRequest == null || combinedRequest == null || customRequest == null) {
                         setUniverseControlsEnabled(false);
                         styleInlineStatus(
                                 universeStatusLabel,
@@ -1218,6 +1249,7 @@ public final class DPolarisJavaApp {
                     loadUniverse(UNIVERSE_NASDAQ, nasdaqRequest, forceRefresh);
                     loadUniverse(UNIVERSE_WSB, wsbRequest, forceRefresh);
                     loadUniverse(UNIVERSE_COMBINED, combinedRequest, forceRefresh);
+                    loadUniverse(UNIVERSE_CUSTOM, customRequest, forceRefresh);
                 } catch (Exception ex) {
                     String error = humanizeError(ex).toLowerCase();
                     if (error.contains("404") && error.contains("universe") && error.contains("list")) {
@@ -1251,9 +1283,10 @@ public final class DPolarisJavaApp {
     }
 
     private boolean allUniverseTabsLoaded() {
-        return universeNasdaqTableModel != null && universeNasdaqTableModel.getRowCount() > 0
-                && universeWsbTableModel != null && universeWsbTableModel.getRowCount() > 0
-                && universeCombinedTableModel != null && universeCombinedTableModel.getRowCount() > 0;
+        return universeNasdaqPayload != null && !universeNasdaqPayload.isEmpty()
+                && universeWsbPayload != null && !universeWsbPayload.isEmpty()
+                && universeCombinedPayload != null && !universeCombinedPayload.isEmpty()
+                && universeCustomPayload != null && !universeCustomPayload.isEmpty();
     }
 
     private boolean isBackendUnreachableError(Exception throwable) {
@@ -1301,6 +1334,12 @@ public final class DPolarisJavaApp {
                                 universeWsbTableModel.setRows(rows);
                             }
                         }
+                        case UNIVERSE_CUSTOM -> {
+                            universeCustomPayload = payload;
+                            if (universeCustomTableModel != null) {
+                                universeCustomTableModel.setRows(rows);
+                            }
+                        }
                         default -> {
                             universeCombinedPayload = payload;
                             if (universeCombinedTableModel != null) {
@@ -1308,6 +1347,7 @@ public final class DPolarisJavaApp {
                             }
                         }
                     }
+                    rebuildActiveUniverseSectorOptions();
                     applyUniverseFilters();
                     refreshUniverseTabTitles();
                     updateUniverseMetaDisplay();
@@ -1323,7 +1363,7 @@ public final class DPolarisJavaApp {
                             loadText,
                             loadColor
                     );
-                    if (rows.isEmpty()) {
+                    if (rows.isEmpty() && !UNIVERSE_CUSTOM.equals(canonicalUniverseId)) {
                         styleInlineStatus(
                                 universeStatusLabel,
                                 "Universe: backend responded but returned 0 tickers for " + canonicalUniverseId,
@@ -1495,20 +1535,24 @@ public final class DPolarisJavaApp {
     }
 
     private void refreshUniverseTabTitles() {
-        if (universeTabs == null || universeTabs.getTabCount() < 3) {
+        if (universeTabs == null || universeTabs.getTabCount() < 4) {
             return;
         }
         universeTabs.setTitleAt(
                 0,
-                buildUniverseTabTitle("Nasdaq", universeNasdaqPayload, universeNasdaqTableModel)
+                buildUniverseTabTitle("Nasdaq 500", universeNasdaqPayload, universeNasdaqTableModel)
         );
         universeTabs.setTitleAt(
                 1,
-                buildUniverseTabTitle("WSB", universeWsbPayload, universeWsbTableModel)
+                buildUniverseTabTitle("WSB 100", universeWsbPayload, universeWsbTableModel)
         );
         universeTabs.setTitleAt(
                 2,
-                buildUniverseTabTitle("Combined 400", universeCombinedPayload, universeCombinedTableModel)
+                buildUniverseTabTitle("Combined", universeCombinedPayload, universeCombinedTableModel)
+        );
+        universeTabs.setTitleAt(
+                3,
+                buildUniverseTabTitle("Custom", universeCustomPayload, universeCustomTableModel)
         );
     }
 
@@ -1558,8 +1602,11 @@ public final class DPolarisJavaApp {
                     payload,
                     "tickers",
                     "merged",
+                    "nasdaq500",
                     "nasdaq300",
                     "wsb100",
+                    "combined",
+                    "custom",
                     "nasdaq_top_500",
                     "wsb_top_500",
                     "items",
@@ -1590,6 +1637,264 @@ public final class DPolarisJavaApp {
         if (universeClearSelectionButton != null) {
             universeClearSelectionButton.setEnabled(enabled);
         }
+        if (universeAddStockButton != null) {
+            universeAddStockButton.setEnabled(enabled);
+        }
+        if (universeAddStockField != null) {
+            universeAddStockField.setEnabled(enabled);
+        }
+    }
+
+    private void rebuildActiveUniverseSectorOptions() {
+        if (universeSectorFilterCombo == null) {
+            return;
+        }
+        UniverseTableModel model = activeUniverseModel();
+        String prior = universeSectorFilterCombo.getSelectedItem() == null
+                ? "All"
+                : String.valueOf(universeSectorFilterCombo.getSelectedItem());
+        List<String> sectors = new ArrayList<>();
+        if (model != null) {
+            for (UniverseRow row : model.rows()) {
+                if (row == null) {
+                    continue;
+                }
+                String sector = row.sector() == null ? "" : row.sector().trim();
+                if (sector.isBlank() || "—".equals(sector)) {
+                    continue;
+                }
+                sectors.add(sector);
+            }
+        }
+        sectors.sort(String.CASE_INSENSITIVE_ORDER);
+        universeSectorFilterCombo.removeAllItems();
+        universeSectorFilterCombo.addItem("All");
+        String last = null;
+        for (String sector : sectors) {
+            if (last != null && last.equalsIgnoreCase(sector)) {
+                continue;
+            }
+            universeSectorFilterCombo.addItem(sector);
+            last = sector;
+        }
+        boolean restored = false;
+        for (int i = 0; i < universeSectorFilterCombo.getItemCount(); i++) {
+            String candidate = String.valueOf(universeSectorFilterCombo.getItemAt(i));
+            if (candidate.equalsIgnoreCase(prior)) {
+                universeSectorFilterCombo.setSelectedIndex(i);
+                restored = true;
+                break;
+            }
+        }
+        if (!restored) {
+            universeSectorFilterCombo.setSelectedIndex(0);
+        }
+    }
+
+    private void addCustomStockFromUi() {
+        if (universeAddStockField == null || universeAddStockButton == null) {
+            return;
+        }
+        String symbol = universeAddStockField.getText() == null
+                ? ""
+                : universeAddStockField.getText().trim().toUpperCase();
+        if (!CUSTOM_TICKER_PATTERN.matcher(symbol).matches()) {
+            styleInlineStatus(universeStatusLabel, "Custom: invalid ticker format (use A-Z/0-9/./-, max 10)", COLOR_WARNING);
+            return;
+        }
+
+        configureClientFromUI();
+        universeAddStockButton.setEnabled(false);
+        universeAddStockField.setEnabled(false);
+        styleInlineStatus(universeStatusLabel, "Custom: adding " + symbol + "...", COLOR_WARNING);
+
+        SwingWorker<Map<String, Object>, Void> worker = new SwingWorker<>() {
+            @Override
+            protected Map<String, Object> doInBackground() throws Exception {
+                return scanService.addCustomSymbol(symbol);
+            }
+
+            @Override
+            protected void done() {
+                universeAddStockButton.setEnabled(true);
+                universeAddStockField.setEnabled(true);
+                try {
+                    Map<String, Object> response = get();
+                    universeAddStockField.setText("");
+                    styleInlineStatus(universeStatusLabel, "Custom: added " + symbol, COLOR_SUCCESS);
+                    appendBackendLog(ts() + " | Custom ticker added: " + symbol + " (" + Json.pretty(response) + ")");
+                    ensureDeepLearningTickersLoaded(true);
+                } catch (Exception ex) {
+                    styleInlineStatus(
+                            universeStatusLabel,
+                            "Custom: add failed (" + humanizeError(ex) + ")",
+                            COLOR_DANGER
+                    );
+                }
+            }
+        };
+        worker.execute();
+    }
+
+    private void configureUniverseSorter(TableRowSorter<UniverseTableModel> sorter) {
+        if (sorter == null) {
+            return;
+        }
+        applyUniverseSorterComparators(sorter, javax.swing.SortOrder.ASCENDING);
+        sorter.addRowSorterListener(e -> {
+            javax.swing.SortOrder order = javax.swing.SortOrder.ASCENDING;
+            List<? extends javax.swing.RowSorter.SortKey> keys = sorter.getSortKeys();
+            if (!keys.isEmpty()) {
+                order = keys.get(0).getSortOrder();
+            }
+            applyUniverseSorterComparators(sorter, order);
+        });
+    }
+
+    /**
+     * Null handling rule for universe sorting:
+     * always keep missing values at the bottom (ascending and descending).
+     * Swing reverses comparators for descending, so we flip null priority per direction.
+     */
+    private void applyUniverseSorterComparators(
+            TableRowSorter<UniverseTableModel> sorter,
+            javax.swing.SortOrder order
+    ) {
+        boolean nullsLastInComparator = order != javax.swing.SortOrder.DESCENDING;
+        sorter.setComparator(1, (a, b) -> String.CASE_INSENSITIVE_ORDER.compare(String.valueOf(a), String.valueOf(b)));
+        sorter.setComparator(2, (a, b) -> String.CASE_INSENSITIVE_ORDER.compare(String.valueOf(a), String.valueOf(b)));
+        sorter.setComparator(3, (a, b) -> String.CASE_INSENSITIVE_ORDER.compare(String.valueOf(a), String.valueOf(b)));
+        sorter.setComparator(4, (a, b) -> compareNullableDouble(parseDisplayNumeric(a), parseDisplayNumeric(b), nullsLastInComparator));
+        sorter.setComparator(5, (a, b) -> compareNullableDouble(parseDisplayNumeric(a), parseDisplayNumeric(b), nullsLastInComparator));
+        sorter.setComparator(6, (a, b) -> compareNullableDouble(parseDisplayNumeric(a), parseDisplayNumeric(b), nullsLastInComparator));
+        sorter.setComparator(7, (a, b) -> compareNullableLong(parseAnalysisDateEpoch(a), parseAnalysisDateEpoch(b), nullsLastInComparator));
+        sorter.setComparator(8, (a, b) -> compareNullableLong(parseDisplayLong(a), parseDisplayLong(b), nullsLastInComparator));
+    }
+
+    private void runUniverseSortSanityCheck() {
+        boolean numericOk = compareNullableDouble(parseDisplayNumeric("2.0B"), parseDisplayNumeric("900.0M"), true) > 0
+                && compareNullableDouble(parseDisplayNumeric("—"), parseDisplayNumeric("1.0M"), true) > 0;
+        boolean dateOk = compareNullableLong(
+                parseAnalysisDateEpoch("2026-02-14T12:00:00"),
+                parseAnalysisDateEpoch("2026-02-13T12:00:00"),
+                true
+        ) > 0;
+        if (!numericOk || !dateOk) {
+            appendBackendLog(ts() + " | WARN: Universe sorter sanity check failed.");
+        }
+    }
+
+    private int compareNullableDouble(Double left, Double right, boolean nullsLast) {
+        if (left == null && right == null) {
+            return 0;
+        }
+        if (left == null) {
+            return nullsLast ? 1 : -1;
+        }
+        if (right == null) {
+            return nullsLast ? -1 : 1;
+        }
+        return Double.compare(left, right);
+    }
+
+    private int compareNullableLong(Long left, Long right, boolean nullsLast) {
+        if (left == null && right == null) {
+            return 0;
+        }
+        if (left == null) {
+            return nullsLast ? 1 : -1;
+        }
+        if (right == null) {
+            return nullsLast ? -1 : 1;
+        }
+        return Long.compare(left, right);
+    }
+
+    private Double parseDisplayNumeric(Object value) {
+        if (value == null) {
+            return null;
+        }
+        String text = String.valueOf(value).trim();
+        if (text.isBlank() || "—".equals(text)) {
+            return null;
+        }
+        String normalized = text.replace(",", "").replace("%", "").replace("+", "").trim().toUpperCase();
+        if (normalized.isBlank()) {
+            return null;
+        }
+
+        double multiplier = 1.0;
+        char suffix = normalized.charAt(normalized.length() - 1);
+        if (suffix == 'K' || suffix == 'M' || suffix == 'B' || suffix == 'T') {
+            normalized = normalized.substring(0, normalized.length() - 1).trim();
+            multiplier = switch (suffix) {
+                case 'K' -> 1_000.0;
+                case 'M' -> 1_000_000.0;
+                case 'B' -> 1_000_000_000.0;
+                case 'T' -> 1_000_000_000_000.0;
+                default -> 1.0;
+            };
+        }
+        if (normalized.isBlank()) {
+            return null;
+        }
+        try {
+            return Double.parseDouble(normalized) * multiplier;
+        } catch (RuntimeException ignored) {
+            return null;
+        }
+    }
+
+    private Long parseDisplayLong(Object value) {
+        Double parsed = parseDisplayNumeric(value);
+        if (parsed == null || !Double.isFinite(parsed)) {
+            return null;
+        }
+        return Math.round(parsed);
+    }
+
+    private Long parseAnalysisDateEpoch(Object value) {
+        if (value == null) {
+            return null;
+        }
+        String raw = String.valueOf(value).trim();
+        if (raw.isBlank() || "—".equals(raw)) {
+            return null;
+        }
+        String normalized = raw.replace(' ', 'T');
+        try {
+            return java.time.Instant.parse(normalized).toEpochMilli();
+        } catch (RuntimeException ignored) {
+            // Fallback to local datetime parsing.
+        }
+        try {
+            return java.time.LocalDateTime.parse(normalized).toInstant(java.time.ZoneOffset.UTC).toEpochMilli();
+        } catch (RuntimeException ignored) {
+            // Continue fallback parsing below.
+        }
+        try {
+            return java.time.LocalDateTime.parse(raw, DateTimeFormatter.ofPattern("yyyy-MM-dd HH:mm:ss"))
+                    .toInstant(java.time.ZoneOffset.UTC)
+                    .toEpochMilli();
+        } catch (RuntimeException ignored) {
+            // continue
+        }
+        try {
+            return java.time.LocalDateTime.parse(raw, DateTimeFormatter.ofPattern("yyyy-MM-dd HH:mm"))
+                    .toInstant(java.time.ZoneOffset.UTC)
+                    .toEpochMilli();
+        } catch (RuntimeException ignored) {
+            // continue
+        }
+        try {
+            return java.time.LocalDate.parse(raw, DateTimeFormatter.ofPattern("yyyy-MM-dd"))
+                    .atStartOfDay()
+                    .toInstant(java.time.ZoneOffset.UTC)
+                    .toEpochMilli();
+        } catch (RuntimeException ignored) {
+            // continue
+        }
+        return null;
     }
 
     private String resolveUniverseRequestId(List<String> availableNames, String canonicalId) {
@@ -1610,6 +1915,10 @@ public final class DPolarisJavaApp {
         }
 
         if (UNIVERSE_NASDAQ.equals(canonicalId)) {
+            String alias = byNormalized.get(normalizeKey("nasdaq300"));
+            if (alias != null) {
+                return alias;
+            }
             return byNormalized.get(normalizeKey("nasdaq_top_500"));
         }
         if (UNIVERSE_WSB.equals(canonicalId)) {
@@ -1620,11 +1929,14 @@ public final class DPolarisJavaApp {
             return byNormalized.get(normalizeKey("wsb_top_500"));
         }
         if (UNIVERSE_COMBINED.equals(canonicalId)) {
-            String alias = byNormalized.get(normalizeKey("combined"));
-            if (alias != null) {
-                return alias;
+            String combined400 = byNormalized.get(normalizeKey("combined400"));
+            if (combined400 != null) {
+                return combined400;
             }
             return byNormalized.get(normalizeKey("combined_1000"));
+        }
+        if (UNIVERSE_CUSTOM.equals(canonicalId)) {
+            return byNormalized.get(normalizeKey("customstocks"));
         }
         return null;
     }
@@ -1737,6 +2049,7 @@ public final class DPolarisJavaApp {
                     loadUniverse(UNIVERSE_NASDAQ, UNIVERSE_NASDAQ, true);
                     loadUniverse(UNIVERSE_WSB, UNIVERSE_WSB, true);
                     loadUniverse(UNIVERSE_COMBINED, UNIVERSE_COMBINED, true);
+                    loadUniverse(UNIVERSE_CUSTOM, UNIVERSE_CUSTOM, true);
                     appendBackendLog(ts() + " | Universe refresh completed: "
                             + firstNonBlank(stringOrEmpty(findAnyValue(response, "status")), "ok"));
                 } catch (Exception ex) {
@@ -1758,8 +2071,11 @@ public final class DPolarisJavaApp {
         Object listCandidate = findAnyValue(payload,
                 "tickers",
                 "merged",
+                "nasdaq500",
                 "nasdaq300",
                 "wsb100",
+                "combined",
+                "custom",
                 "nasdaq_top_500",
                 "wsb_top_500",
                 "symbols",
@@ -1805,7 +2121,7 @@ public final class DPolarisJavaApp {
                             "change_percent",
                             "change_1d"));
                     String analysisDate = firstNonBlank(
-                            stringOrEmpty(findAnyValue(map, "analysis_date", "last_analysis_at")),
+                            stringOrEmpty(findAnyValue(map, "last_analysis_date", "analysis_date", "last_analysis_at")),
                             analysisDates == null ? "" : firstNonBlank(analysisDates.get(ticker), "")
                     );
                     Long mentionCount = asLong(findAnyValue(map, "mention_count", "mentions", "count"));
@@ -1867,9 +2183,11 @@ public final class DPolarisJavaApp {
         }
 
         String search = universeSearchField == null ? "" : universeSearchField.getText().trim().toLowerCase();
-        String sectorFilter = universeSectorFilterField == null
-                ? ""
-                : universeSectorFilterField.getText().trim().toLowerCase();
+        String selectedSector = "";
+        if (universeSectorFilterCombo != null && universeSectorFilterCombo.getSelectedItem() != null) {
+            selectedSector = String.valueOf(universeSectorFilterCombo.getSelectedItem()).trim();
+        }
+        final String sectorFilter = selectedSector;
         double minMarketCap = universeLiquidityFilterSpinner == null
                 ? 0.0
                 : Json.asDouble(universeLiquidityFilterSpinner.getValue(), 0.0);
@@ -1892,7 +2210,8 @@ public final class DPolarisJavaApp {
                         return false;
                     }
                 }
-                if (!sectorFilter.isBlank() && !safeLower(row.sector()).contains(sectorFilter)) {
+                if (!sectorFilter.isBlank() && !"all".equalsIgnoreCase(sectorFilter)
+                        && !safeLower(row.sector()).equals(safeLower(sectorFilter))) {
                     return false;
                 }
                 if (minMarketCap > 0.0) {
@@ -3096,6 +3415,7 @@ public final class DPolarisJavaApp {
         return switch (universeTabs.getSelectedIndex()) {
             case 1 -> UNIVERSE_WSB;
             case 2 -> UNIVERSE_COMBINED;
+            case 3 -> UNIVERSE_CUSTOM;
             default -> UNIVERSE_NASDAQ;
         };
     }
@@ -3107,6 +3427,7 @@ public final class DPolarisJavaApp {
         return switch (universeTabs.getSelectedIndex()) {
             case 1 -> universeWsbTableModel;
             case 2 -> universeCombinedTableModel;
+            case 3 -> universeCustomTableModel;
             default -> universeNasdaqTableModel;
         };
     }
@@ -3118,6 +3439,7 @@ public final class DPolarisJavaApp {
         return switch (universeTabs.getSelectedIndex()) {
             case 1 -> universeWsbTable;
             case 2 -> universeCombinedTable;
+            case 3 -> universeCustomTable;
             default -> universeNasdaqTable;
         };
     }
@@ -3129,6 +3451,7 @@ public final class DPolarisJavaApp {
         return switch (universeTabs.getSelectedIndex()) {
             case 1 -> universeWsbSorter;
             case 2 -> universeCombinedSorter;
+            case 3 -> universeCustomSorter;
             default -> universeNasdaqSorter;
         };
     }
@@ -3140,6 +3463,7 @@ public final class DPolarisJavaApp {
         return switch (universeTabs.getSelectedIndex()) {
             case 1 -> universeWsbPayload;
             case 2 -> universeCombinedPayload;
+            case 3 -> universeCustomPayload;
             default -> universeNasdaqPayload;
         };
     }

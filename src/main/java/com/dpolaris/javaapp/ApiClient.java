@@ -179,6 +179,10 @@ final class ApiClient {
         return canReachWithFallback(
                 "GET",
                 List.of(
+                        "/api/universe/nasdaq500",
+                        "/universe/nasdaq500",
+                        "/scan/universe/nasdaq500",
+                        "/api/scan/universe/nasdaq500",
                         "/api/universe/nasdaq300",
                         "/universe/nasdaq300",
                         "/scan/universe/nasdaq300",
@@ -186,6 +190,34 @@ final class ApiClient {
                 ),
                 10
         );
+    }
+
+    Map<String, Object> addCustomUniverseSymbol(String symbol) throws IOException, InterruptedException {
+        String body = Json.compact(Map.of("symbol", symbol == null ? "" : symbol));
+        Object response = requestWithFallback(
+                "POST",
+                List.of(
+                        "/api/universe/custom/add",
+                        "/universe/custom/add"
+                ),
+                body,
+                30
+        );
+        return Json.asObject(response);
+    }
+
+    Map<String, Object> removeCustomUniverseSymbol(String symbol) throws IOException, InterruptedException {
+        String body = Json.compact(Map.of("symbol", symbol == null ? "" : symbol));
+        Object response = requestWithFallback(
+                "POST",
+                List.of(
+                        "/api/universe/custom/remove",
+                        "/universe/custom/remove"
+                ),
+                body,
+                30
+        );
+        return Json.asObject(response);
     }
 
     Map<String, Object> predictSymbol(String symbol) throws IOException, InterruptedException {
