@@ -17,6 +17,7 @@ import java.time.format.DateTimeFormatter;
 import java.time.format.DateTimeParseException;
 import java.util.ArrayList;
 import java.util.Comparator;
+import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
 
@@ -332,6 +333,7 @@ final class AnalysisWorkspacePanel extends JPanel {
             return rows;
         }
 
+        Map<String, AnalysisRow> merged = new LinkedHashMap<>();
         for (Object item : list) {
             if (!(item instanceof Map<?, ?> itemMapRaw)) {
                 continue;
@@ -341,13 +343,58 @@ final class AnalysisWorkspacePanel extends JPanel {
             String createdAt = firstNonBlank(asString(map.get("analysis_date")), asString(map.get("created_at")));
             String ticker = firstNonBlank(asString(map.get("ticker")), asString(map.get("symbol"))).toUpperCase();
             String model = asString(map.get("model_type"));
+            String runId = asString(map.get("run_id"));
             String summary = asString(map.get("summary"));
             String device = asString(map.get("device"));
-            rows.add(new AnalysisRow(id, createdAt, ticker, model, summary, device));
+            List<String> modelTypes = parseModelTypes(map.get("model_types"));
+            String displayModel = model;
+            if ("ensemble".equalsIgnoreCase(model) && !modelTypes.isEmpty()) {
+                displayModel = "ensemble[" + String.join("/", modelTypes) + "]";
+            }
+
+            AnalysisRow candidate = new AnalysisRow(id, createdAt, ticker, displayModel, summary, device, runId, model);
+            String dedupeKey = !runId.isBlank()
+                    ? (ticker + "|" + runId)
+                    : (id.isBlank() ? ticker + "|" + createdAt + "|" + model : id);
+            AnalysisRow existing = merged.get(dedupeKey);
+            if (existing == null || preferRow(candidate, existing)) {
+                merged.put(dedupeKey, candidate);
+            }
         }
 
+        rows.addAll(merged.values());
         rows.sort(Comparator.comparing((AnalysisRow r) -> r.createdAt == null ? "" : r.createdAt).reversed());
         return rows;
+    }
+
+    private boolean preferRow(AnalysisRow candidate, AnalysisRow existing) {
+        if (candidate == null) {
+            return false;
+        }
+        if (existing == null) {
+            return true;
+        }
+        boolean candidateEnsemble = candidate.isEnsemble();
+        boolean existingEnsemble = existing.isEnsemble();
+        if (candidateEnsemble != existingEnsemble) {
+            return candidateEnsemble;
+        }
+        String candidateTs = candidate.createdAt == null ? "" : candidate.createdAt;
+        String existingTs = existing.createdAt == null ? "" : existing.createdAt;
+        return candidateTs.compareTo(existingTs) > 0;
+    }
+
+    private List<String> parseModelTypes(Object value) {
+        List<String> types = new ArrayList<>();
+        if (value instanceof List<?> list) {
+            for (Object item : list) {
+                String text = asString(item).toLowerCase();
+                if (!text.isBlank() && !types.contains(text)) {
+                    types.add(text);
+                }
+            }
+        }
+        return types;
     }
 
     private void applyFilters() {
@@ -542,14 +589,31 @@ final class AnalysisWorkspacePanel extends JPanel {
         private final String modelType;
         private final String summary;
         private final String device;
+        private final String runId;
+        private final String rawModelType;
 
-        private AnalysisRow(String id, String createdAt, String ticker, String modelType, String summary, String device) {
+        private AnalysisRow(
+                String id,
+                String createdAt,
+                String ticker,
+                String modelType,
+                String summary,
+                String device,
+                String runId,
+                String rawModelType
+        ) {
             this.id = id;
             this.createdAt = createdAt;
             this.ticker = ticker;
             this.modelType = modelType;
             this.summary = summary;
             this.device = device;
+            this.runId = runId;
+            this.rawModelType = rawModelType;
+        }
+
+        private boolean isEnsemble() {
+            return "ensemble".equalsIgnoreCase(rawModelType) || modelType.toLowerCase().startsWith("ensemble[");
         }
     }
 

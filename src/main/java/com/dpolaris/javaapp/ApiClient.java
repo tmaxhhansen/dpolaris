@@ -286,6 +286,8 @@ final class ApiClient {
     Map<String, Object> runDeepLearning(List<String> tickers) throws IOException, InterruptedException {
         Map<String, Object> payload = new LinkedHashMap<>();
         payload.put("tickers", tickers);
+        payload.put("model_type", "lstm");
+        payload.put("model_types", preferredModelTypes("lstm"));
         payload.put("fetch_data", true);
         payload.put("train_if_missing", true);
         String body = Json.compact(payload);
@@ -455,13 +457,30 @@ final class ApiClient {
 
     Map<String, Object> enqueueDeepLearningJob(String symbol, String modelType, int epochs)
             throws IOException, InterruptedException {
+        List<String> modelTypes = preferredModelTypes(modelType);
+        String primaryModel = modelTypes.isEmpty() ? "lstm" : modelTypes.get(0);
         String body = "{"
                 + "\"symbol\":\"" + Json.escape(symbol.toUpperCase()) + "\","
-                + "\"model_type\":\"" + Json.escape(modelType.toLowerCase()) + "\","
+                + "\"model_type\":\"" + Json.escape(primaryModel) + "\","
+                + "\"model_types\":" + Json.compact(modelTypes) + ","
                 + "\"epochs\":" + epochs
                 + "}";
         Object response = request("POST", "/api/jobs/deep-learning/train", body, 60);
         return Json.asObject(response);
+    }
+
+    private static List<String> preferredModelTypes(String primary) {
+        String normalizedPrimary = primary == null ? "" : primary.trim().toLowerCase();
+        List<String> ordered = new ArrayList<>();
+        if (!normalizedPrimary.isBlank()) {
+            ordered.add(normalizedPrimary);
+        }
+        for (String model : List.of("lstm", "transformer", "mlp")) {
+            if (!ordered.contains(model)) {
+                ordered.add(model);
+            }
+        }
+        return ordered;
     }
 
     Map<String, Object> fetchJob(String jobId) throws IOException, InterruptedException {

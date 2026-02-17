@@ -1604,6 +1604,7 @@ public final class DPolarisJavaApp {
         // Update UI
         if (dlResultsArea != null) {
             dlResultsArea.setText(ts() + " | Starting deep learning for " + selectedTickers.size() + " tickers...\n");
+            dlResultsArea.append(ts() + " | Models: lstm, transformer, mlp (combined verdict)\n");
             dlResultsArea.append(ts() + " | Selected: " + String.join(", ", selectedTickers) + "\n");
         }
         styleInlineStatus(universeStatusLabel, "Running deep learning on " + selectedTickers.size() + " tickers...", COLOR_WARNING);
