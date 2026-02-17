@@ -10103,28 +10103,44 @@ public final class DPolarisJavaApp {
         SwingWorker<Map<String, Object>, Void> worker = new SwingWorker<>() {
             @Override
             protected Map<String, Object> doInBackground() throws Exception {
-                Map<String, Object> response;
-                switch (normalizedAction) {
-                    case "start" -> response = apiClient.startBackendControl();
-                    case "stop" -> response = apiClient.stopBackendControl();
-                    case "restart" -> response = apiClient.restartBackendControl(false);
-                    case "reset" -> {
-                        try {
-                            response = apiClient.restartBackendControl(true);
-                        } catch (Exception cleanError) {
-                            Map<String, Object> fallback = new LinkedHashMap<>();
-                            fallback.put("clean_restart_error", cleanError.getMessage());
-                            fallback.put("stop", apiClient.stopBackendControl());
-                            fallback.put("start", apiClient.startBackendControl());
-                            response = fallback;
+                Map<String, Object> response = new LinkedHashMap<>();
+                try {
+                    Map<String, Object> actionResponse;
+                    switch (normalizedAction) {
+                        case "start" -> actionResponse = apiClient.startBackendControl();
+                        case "stop" -> actionResponse = apiClient.stopBackendControl();
+                        case "restart" -> actionResponse = apiClient.restartBackendControl(false);
+                        case "reset" -> {
+                            try {
+                                actionResponse = apiClient.restartBackendControl(true);
+                            } catch (Exception cleanError) {
+                                Map<String, Object> fallback = new LinkedHashMap<>();
+                                fallback.put("clean_restart_error", humanizeError(cleanError));
+                                try {
+                                    fallback.put("stop", apiClient.stopBackendControl());
+                                } catch (Exception stopError) {
+                                    fallback.put("stop_error", humanizeError(stopError));
+                                }
+                                try {
+                                    fallback.put("start", apiClient.startBackendControl());
+                                } catch (Exception startError) {
+                                    fallback.put("start_error", humanizeError(startError));
+                                }
+                                actionResponse = fallback;
+                            }
                         }
+                        default -> actionResponse = apiClient.fetchBackendControlStatus();
                     }
-                    default -> response = apiClient.fetchBackendControlStatus();
+                    if (actionResponse != null) {
+                        response.putAll(actionResponse);
+                    }
+                } catch (Exception actionError) {
+                    response.put("action_error", humanizeError(actionError));
                 }
                 try {
                     response.put("status_after", apiClient.fetchBackendControlStatus());
                 } catch (Exception statusError) {
-                    response.put("status_error", statusError.getMessage());
+                    response.put("status_error", humanizeError(statusError));
                 }
                 return response;
             }
@@ -10140,7 +10156,17 @@ public final class DPolarisJavaApp {
                             ? Json.asObject(mapRaw)
                             : response;
                     renderBackendControlStatus(statusPayload, "");
-                    String errorDetail = stringOrEmpty(findAnyValue(response, "error_detail", "error", "detail", "status_error"));
+                    String errorDetail = stringOrEmpty(findAnyValue(
+                            response,
+                            "error_detail",
+                            "action_error",
+                            "clean_restart_error",
+                            "stop_error",
+                            "start_error",
+                            "error",
+                            "detail",
+                            "status_error"
+                    ));
                     boolean hasError = !errorDetail.isBlank();
                     if (("start".equals(normalizedAction)
                             || "restart".equals(normalizedAction)
@@ -10163,12 +10189,22 @@ public final class DPolarisJavaApp {
                     }
                 } catch (Exception ex) {
                     String message = humanizeError(ex);
-                    appendSystemControlLog(ts() + " | Backend " + actionLabel + " failed: " + message);
-                    renderBackendControlStatus(lastBackendControlStatus, message);
-                    if (systemBackendActionLabel != null) {
-                        styleInlineStatus(systemBackendActionLabel, "Backend action: failed", COLOR_DANGER);
+                    boolean stillReachable = apiClient.healthCheck(3);
+                    if (stillReachable) {
+                        appendSystemControlLog(ts() + " | Backend " + actionLabel + " warning: " + message);
+                        renderBackendControlStatus(lastBackendControlStatus, message);
+                        if (systemBackendActionLabel != null) {
+                            styleInlineStatus(systemBackendActionLabel, "Backend action: warning", COLOR_WARNING);
+                        }
+                        setSystemControlBusy(false, "Backend " + actionLabel + " completed with warnings", COLOR_WARNING);
+                    } else {
+                        appendSystemControlLog(ts() + " | Backend " + actionLabel + " failed: " + message);
+                        renderBackendControlStatus(lastBackendControlStatus, message);
+                        if (systemBackendActionLabel != null) {
+                            styleInlineStatus(systemBackendActionLabel, "Backend action: failed", COLOR_DANGER);
+                        }
+                        setSystemControlBusy(false, "Backend " + actionLabel + " failed", COLOR_DANGER);
                     }
-                    setSystemControlBusy(false, "Backend " + actionLabel + " failed", COLOR_DANGER);
                     checkConnection();
                 }
             }
